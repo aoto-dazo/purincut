@@ -88,8 +88,11 @@ public class PurinNativePlugin: CAPPlugin, CAPBridgedPlugin, PHPickerViewControl
         CAPPluginMethod(name: "exportStart", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "exportStatus", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "exportCancel", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "clearTemp", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "clearTemp", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "audioFX", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "audioFXStatus", returnType: CAPPluginReturnPromise)
     ]
+    var fxProgress: [String: Double] = [:]
     let purinPlayer = PurinPlayer()
     let purinExporter = PurinExporter()
     func tmpFileURL(_ name: String) -> URL { tmpDir().appendingPathComponent((name as NSString).lastPathComponent) }
@@ -530,11 +533,13 @@ final class PurinPlayer {
 struct RenderSpec {
     struct Layer { let crop: CGRect; let w, cx, cy, radius, border: CGFloat; let bc: CIColor; let fx: Bool }
     struct Adj { let t0, t1: Double; let br, exp, ct, sat, hue, temp: Double }
+    struct Zoom { let t0, t1: Double; let z, x, y: Double }
     let W, H: CGFloat
     let blur: Bool
     let dark: CGFloat
     let layers: [Layer]
     let adjs: [Adj]
+    let zooms: [Zoom]
     let orient: CGImagePropertyOrientation?
     let natural: CGSize
 
@@ -562,6 +567,12 @@ struct RenderSpec {
             as_.append(Adj(t0: d("t0"), t1: d("t1"), br: d("br"), exp: d("exp"), ct: d("ct"), sat: d("sat"), hue: d("hue"), temp: d("temp")))
         }
         adjs = as_
+        var zs: [Zoom] = []
+        for a in o["zoom"] as? [[String: Any]] ?? [] {
+            func d(_ k: String, _ v: Double) -> Double { (a[k] as? NSNumber)?.doubleValue ?? v }
+            zs.append(Zoom(t0: d("t0", 0), t1: d("t1", 0), z: max(1, d("z", 1)), x: d("x", 0), y: d("y", 0)))
+        }
+        zooms = zs
         // 回転情報（縦撮影など）
         let a = transform.a, b = transform.b
         if abs(a) < 0.01 && b > 0.5 { orient = .right } else if abs(a) < 0.01 && b < -0.5 { orient = .left } else if a < -0.5 { orient = .down } else { orient = nil }
@@ -588,6 +599,13 @@ struct RenderSpec {
         }
         src = src.transformed(by: CGAffineTransform(translationX: -src.extent.minX, y: -src.extent.minY))
         let vw = src.extent.width, vh = src.extent.height
+        // ズーム（元の映像を拡大して、見せる位置をずらす）
+        if let zm = zooms.first(where: { time >= $0.t0 - 0.0005 && time < $0.t1 }), zm.z > 1.001 {
+            let z = CGFloat(zm.z), zw = vw / z, zh = vh / z
+            let cx = vw / 2 + CGFloat(zm.x) * (vw - zw) / 2, cyTop = vh / 2 + CGFloat(zm.y) * (vh - zh) / 2
+            let r = CGRect(x: cx - zw / 2, y: vh - (cyTop + zh / 2), width: zw, height: zh)
+            src = src.cropped(to: r).transformed(by: CGAffineTransform(translationX: -r.minX, y: -r.minY)).transformed(by: CGAffineTransform(scaleX: z, y: z))
+        }
         let a = adjs.first { time >= $0.t0 - 0.0005 && time < $0.t1 }
         let full = CGRect(x: 0, y: 0, width: W, height: H)
         var out = CIImage(color: .black).cropped(to: full)
@@ -648,6 +666,14 @@ func purinBuildComposition(_ o: [String: Any], assets: inout [String: AVURLAsset
         let asset: AVURLAsset
         if let a = assets[name] { asset = a } else { asset = AVURLAsset(url: mediaURL(name), options: [AVURLAssetPreferPreciseDurationAndTimingKey: true]); assets[name] = asset }
         guard let sv = asset.tracks(withMediaType: .video).first else { continue }
+        // 音声補正（コンプ・ノイズ除去・BGM除去）済みの音声があればそちらを使う
+        var audioSrc: AVAssetTrack? = asset.tracks(withMediaType: .audio).first
+        if let procs = o["audioFiles"] as? [String: String], let pf = procs[name] {
+            let key = "proc:" + pf
+            let pa: AVURLAsset
+            if let a = assets[key] { pa = a } else { pa = AVURLAsset(url: purinCacheURL(pf), options: [AVURLAssetPreferPreciseDurationAndTimingKey: true]); assets[key] = pa }
+            if let t = pa.tracks(withMediaType: .audio).first { audioSrc = t }
+        }
         if transform == nil { transform = sv.preferredTransform; natural = sv.naturalSize }
         let at0 = purinCT(t)
         let end = vt.timeRange.end
@@ -657,7 +683,7 @@ func purinBuildComposition(_ o: [String: Any], assets: inout [String: AVURLAsset
         if let at = at {
             let aend = at.timeRange.end
             if CMTimeCompare(at0, aend) > 0 { at.insertEmptyTimeRange(CMTimeRange(start: aend, end: at0)) }
-            if let sa = asset.tracks(withMediaType: .audio).first {
+            if let sa = audioSrc {
                 try at.insertTimeRange(range, of: sa, at: at.timeRange.end)
             } else {
                 at.insertEmptyTimeRange(CMTimeRange(start: at.timeRange.end, duration: range.duration))
@@ -789,5 +815,144 @@ extension PurinNativePlugin {
             for u in items where u.pathExtension == "png" || u.pathExtension == "wav" { try? FileManager.default.removeItem(at: u) }
         }
         call.resolve()
+    }
+}
+
+
+func purinTmpURL(_ name: String) -> URL {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("purin", isDirectory: true)
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    return dir.appendingPathComponent((name as NSString).lastPathComponent)
+}
+func purinCacheURL(_ name: String) -> URL {
+    let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("purinaudio", isDirectory: true)
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    return dir.appendingPathComponent((name as NSString).lastPathComponent)
+}
+
+// MARK: - 音声補正（iPhoneのオーディオユニットで処理）
+/// コンプレッサー（AUDynamicsProcessor）、ノイズ除去・BGM除去（AUSoundIsolation＝声の分離）、リミッター
+final class PurinAudioFX {
+    static func setParam(_ unit: AVAudioUnit, match: [String], value: AUValue) {
+        guard let tree = unit.auAudioUnit.parameterTree else { return }
+        for p in tree.allParameters {
+            let n = (p.identifier + " " + p.displayName).lowercased()
+            if match.contains(where: { n.contains($0) }) { p.value = max(p.minValue, min(p.maxValue, value)); return }
+        }
+    }
+
+    /// 元動画の音声を補正したファイル（m4a）を作る。同じ設定なら作り直さない
+    static func process(source: URL, outName: String, comp: Int, nr: Int, vocal: Bool, progress: @escaping (Double) -> Void) throws -> URL {
+        let out = purinCacheURL(outName)
+        if FileManager.default.fileExists(atPath: out.path) { return out }
+        let asset = AVURLAsset(url: source)
+        guard let track = asset.tracks(withMediaType: .audio).first else { throw NSError(domain: "purin", code: 20, userInfo: [NSLocalizedDescriptionKey: "音声がありません"]) }
+        let sr: Double = 48000
+        guard let fmt = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sr, channels: 2, interleaved: false) else { throw NSError(domain: "purin", code: 21) }
+        // 1) 元の音声を一時ファイル（CAF）へ
+        let raw = purinTmpURL(outName + ".raw.caf")
+        try? FileManager.default.removeItem(at: raw)
+        do {
+            let reader = try AVAssetReader(asset: asset)
+            let ro = AVAssetReaderAudioMixOutput(audioTracks: [track], audioSettings: [
+                AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: sr, AVNumberOfChannelsKey: 2,
+                AVLinearPCMBitDepthKey: 32, AVLinearPCMIsFloatKey: true, AVLinearPCMIsNonInterleaved: true, AVLinearPCMIsBigEndianKey: false])
+            reader.add(ro)
+            let file = try AVAudioFile(forWriting: raw, settings: fmt.settings, commonFormat: .pcmFormatFloat32, interleaved: false)
+            guard reader.startReading() else { throw reader.error ?? NSError(domain: "purin", code: 22) }
+            while let sb = ro.copyNextSampleBuffer() {
+                let n = CMSampleBufferGetNumSamples(sb)
+                guard n > 0, let buf = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: AVAudioFrameCount(n)) else { continue }
+                buf.frameLength = AVAudioFrameCount(n)
+                let st = CMSampleBufferCopyPCMDataIntoAudioBufferList(sb, at: 0, frameCount: Int32(n), into: buf.mutableAudioBufferList)
+                if st == noErr { try file.write(from: buf) }
+            }
+        }
+        defer { try? FileManager.default.removeItem(at: raw) }
+        progress(0.15)
+        // 2) オーディオユニットを通してオフライン処理
+        let input = try AVAudioFile(forReading: raw)
+        let engine = AVAudioEngine()
+        let player = AVAudioPlayerNode()
+        engine.attach(player)
+        var chain: [AVAudioNode] = [player]
+        if nr > 0 || vocal {
+            let desc = AudioComponentDescription(componentType: kAudioUnitType_Effect, componentSubType: kAudioUnitSubType_AUSoundIsolation, componentManufacturer: kAudioUnitManufacturer_Apple, componentFlags: 0, componentFlagsMask: 0)
+            let iso = AVAudioUnitEffect(audioComponentDescription: desc)
+            engine.attach(iso)
+            // 声以外をどれだけ消すか（BGM除去は100%、ノイズ除去は弱/強）
+            let mix: AUValue = vocal ? 100 : (nr >= 2 ? 90 : 65)
+            setParam(iso, match: ["wetdry", "wet", "mix"], value: mix)
+            chain.append(iso)
+        }
+        if comp > 0 {
+            let hp = AVAudioUnitEQ(numberOfBands: 1)
+            hp.bands[0].filterType = .highPass; hp.bands[0].frequency = 80; hp.bands[0].bypass = false
+            engine.attach(hp); chain.append(hp)
+            let desc = AudioComponentDescription(componentType: kAudioUnitType_Effect, componentSubType: kAudioUnitSubType_DynamicsProcessor, componentManufacturer: kAudioUnitManufacturer_Apple, componentFlags: 0, componentFlagsMask: 0)
+            let dyn = AVAudioUnitEffect(audioComponentDescription: desc)
+            engine.attach(dyn)
+            let th: [AUValue] = [-18, -26, -34], gain: [AUValue] = [5, 9, 13]
+            let i = min(2, comp - 1)
+            AudioUnitSetParameter(dyn.audioUnit, 0, kAudioUnitScope_Global, 0, th[i], 0)      // しきい値
+            AudioUnitSetParameter(dyn.audioUnit, 1, kAudioUnitScope_Global, 0, 3, 0)          // ヘッドルーム（圧縮の強さ）
+            AudioUnitSetParameter(dyn.audioUnit, 4, kAudioUnitScope_Global, 0, 0.004, 0)      // アタック
+            AudioUnitSetParameter(dyn.audioUnit, 5, kAudioUnitScope_Global, 0, 0.12, 0)       // リリース
+            AudioUnitSetParameter(dyn.audioUnit, 6, kAudioUnitScope_Global, 0, gain[i], 0)    // 持ち上げ
+            chain.append(dyn)
+            let limDesc = AudioComponentDescription(componentType: kAudioUnitType_Effect, componentSubType: kAudioUnitSubType_PeakLimiter, componentManufacturer: kAudioUnitManufacturer_Apple, componentFlags: 0, componentFlagsMask: 0)
+            let lim = AVAudioUnitEffect(audioComponentDescription: limDesc)
+            engine.attach(lim); chain.append(lim)
+        }
+        for i in 0..<(chain.count - 1) { engine.connect(chain[i], to: chain[i + 1], format: fmt) }
+        engine.connect(chain[chain.count - 1], to: engine.mainMixerNode, format: fmt)
+        try engine.enableManualRenderingMode(.offline, format: fmt, maximumFrameCount: 4096)
+        try engine.start()
+        player.scheduleFile(input, at: nil)
+        player.play()
+        let tmpOut = purinCacheURL(outName + ".part.m4a")
+        try? FileManager.default.removeItem(at: tmpOut)
+        let outFile = try AVAudioFile(forWriting: tmpOut, settings: [AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: sr, AVNumberOfChannelsKey: 2, AVEncoderBitRateKey: 192000], commonFormat: .pcmFormatFloat32, interleaved: false)
+        guard let buf = AVAudioPCMBuffer(pcmFormat: engine.manualRenderingFormat, frameCapacity: engine.manualRenderingMaximumFrameCount) else { throw NSError(domain: "purin", code: 23) }
+        let total = input.length
+        var stall = 0
+        while engine.manualRenderingSampleTime < total {
+            let before = engine.manualRenderingSampleTime
+            let left = total - engine.manualRenderingSampleTime
+            let n = AVAudioFrameCount(min(Int64(buf.frameCapacity), left))
+            let st = try engine.renderOffline(n, to: buf)
+            if st == .success { try outFile.write(from: buf) } else if st == .error { throw NSError(domain: "purin", code: 24, userInfo: [NSLocalizedDescriptionKey: "音声の処理に失敗しました"]) }
+            progress(0.15 + 0.85 * Double(engine.manualRenderingSampleTime) / Double(max(1, total)))
+            if engine.manualRenderingSampleTime == before { stall += 1; if stall > 50 { break } } else { stall = 0 }
+        }
+        player.stop(); engine.stop()
+        try? FileManager.default.removeItem(at: out)
+        try FileManager.default.moveItem(at: tmpOut, to: out)
+        return out
+    }
+}
+
+extension PurinNativePlugin {
+    /// 音声補正を作る（裏で処理し、進み具合は audioFXStatus で確認）
+    @objc func audioFX(_ call: CAPPluginCall) {
+        guard let name = call.getString("name"), let out = call.getString("out") else { call.reject("引数がありません"); return }
+        let comp = call.getInt("comp") ?? 0, nr = call.getInt("nr") ?? 0, vocal = call.getBool("vocal") ?? false
+        let src = mediaURL(name)
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let u = try PurinAudioFX.process(source: src, outName: out, comp: comp, nr: nr, vocal: vocal) { p in
+                    self.fxProgress[out] = p
+                }
+                _ = u
+                self.fxProgress[out] = 1
+                call.resolve(["file": out])
+            } catch {
+                self.fxProgress[out] = -1
+                call.reject("音声補正できませんでした: \(error.localizedDescription)")
+            }
+        }
+    }
+    @objc func audioFXStatus(_ call: CAPPluginCall) {
+        call.resolve(["progress": fxProgress[call.getString("out") ?? ""] ?? 0])
     }
 }
