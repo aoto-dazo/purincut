@@ -1241,7 +1241,7 @@ function clipAt(row,x,w){if(!row)return null;const list=clipsOf(row);
 function prepDrag(h){const it=selItem({kind:h.kind,id:h.id});tp.t0=h.t0;tp.t1=h.t1;tp.kind=h.kind;
   if(h.kind==='seg'){tp.A=captureAnchors();tp.orig={gap:it.gap||0,s:it.s,e:it.e,_t:it._t,_t1:it._t1,prevEnd:it._t-(it.gap||0),dur:(srcMeta(it.src)?.kind==='image'?3600:srcMeta(it.src)?.dur)||it.e}}
   else if(h.kind==='cap')tp.orig={src:it.src,s:it.s,e:it.e};
-  else if(h.kind==='ov'){tp.orig={t:it.t,d:it.d};tp.ovOrig=new Map(S.overlays.map(o=>[o,o.t]))}
+  else if(h.kind==='ov'){tp.orig={t:it.t,d:it.d};tp.ovOrig=new Map(S.overlays.map(o=>[o,{t:o.t,d:o.d}]))}
   else if(h.kind==='sfx')tp.orig={t:it.t};
   else if(h.kind==='bgm')tp.orig=clone(S.bgmClip);
   const T=[S.tl,0,tlDur];for(const p of eff)T.push(p.t,p.t+plen(p));
@@ -1291,12 +1291,10 @@ tlc.addEventListener('pointermove',e=>{if(!tp.ptr.has(e.pointerId))return;tp.ptr
       else if(k==='cap'){const sa=srcAt(Math.max(0,nt-1e-3));if(sa&&sa.src===it.src)it.e=Math.max(sa.x+1e-3,it.s+.1)}}
     if(k==='cap')S.captions.sort((a,b)=>a.s-b.s);
     req()}});
-// 同じトラックのテロップにぶつかったら、押して一緒に動かす（重ならない・止まらない）
-function pushOv(it,mode){const M=tp.ovOrig;if(!M)return;for(const [o,t] of M)if(o!==it)o.t=t;
-  const oc=tp.orig.t+tp.orig.d/2,same=S.overlays.filter(o=>o!==it&&o.track===it.track);
-  if(mode!=='R'){const left=same.filter(o=>M.get(o)+o.d/2<=oc).sort((a,b)=>b.t-a.t);let lim=it.t;for(const o of left){if(o.t+o.d>lim)o.t=lim-o.d;lim=o.t}
-    if(lim<0){const over=-lim;for(const o of left)o.t+=over;if(mode==='L'){it.t+=over;it.d=Math.max(.1,it.d-over)}else it.t+=over}}
-  if(mode!=='L'){const right=same.filter(o=>M.get(o)+o.d/2>oc).sort((a,b)=>a.t-b.t);let lim=it.t+it.d;for(const o of right){if(o.t<lim)o.t=lim;lim=o.t+o.d}}}
+// 同じトラックのテロップに重ねたら、重なった分だけ相手を削る（ドラッグ中もそのまま見える）
+function pushOv(it){const M=tp.ovOrig;if(!M)return;for(const [o,v] of M)if(o!==it){o.t=v.t;o.d=v.d}
+  const A=it.t,B=it.t+it.d;for(const o of S.overlays){if(o===it||o.track!==it.track)continue;const xa=o.t,xb=o.t+o.d;if(xb<=A+1e-3||xa>=B-1e-3)continue;
+    if(xa<A)o.d=A-xa;else if(xb>B){o.t=B;o.d=xb-B}else o.d=0}}
 // 同じトラックで重なった部分は、動かしたクリップで上書き（Premiereの上書きと同じ。二重表示を防ぐ）
 function overwriteOv(it){const a=it.t,b=it.t+it.d;let hit=false;
   for(const x of S.overlays.slice()){if(x===it||x.track!==it.track)continue;const xa=x.t,xb=x.t+x.d;if(xb<=a+1e-3||xa>=b-1e-3)continue;hit=true;
@@ -1309,7 +1307,7 @@ const tlUp=e=>{if(!tp.ptr.has(e.pointerId))return;const n=tp.ptr.size;tp.ptr.del
   if(n===1&&tp.mode==='pending'&&e.type==='pointerup')tlTap(e);
   else if(tp.pushed){const it=selItem();
     // 同じトラックで他のテキスト・画像と重なったら、空いているトラックへ移す（二重に表示されないように）
-    if(it&&S.sel.kind==='ov')overwriteOv(it);
+    if(it&&S.sel.kind==='ov'){if(tp.ovOrig)for(const [o,v] of tp.ovOrig)if(o!==it){o.t=v.t;o.d=v.d}overwriteOv(it)}tp.ovOrig=null;
     autosave();fitTl();renderPanel()}
   else if(tp.lifted)select(S.sel);
   tp.mode=null;tp.lifted=false;tp.snapT=null;req()};
