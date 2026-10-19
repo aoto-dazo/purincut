@@ -33,7 +33,14 @@ jobs:
             -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             build 2>&1 | tee build.log | grep -E "error:|warning: unable|BUILD (SUCCEEDED|FAILED)" || true
-          test -d build/Build/Products/Release-iphoneos/App.app || (tail -200 build.log; exit 1)
+          if [ ! -f build/Build/Products/Release-iphoneos/App.app/App ]; then grep -E "error:|warning: .*only available" build.log | head -80 > errors.txt; tail -150 build.log >> errors.txt; cat errors.txt; exit 1; fi
+
+      - name: 失敗したらエラー内容を公開（修正用）
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "log-${{ github.run_number }}" ios/App/errors.txt --prerelease --title "ビルドエラー ${{ github.run_number }}" --notes "ビルド失敗のログ" || true
 
       - name: ipaファイルにまとめる
         run: |

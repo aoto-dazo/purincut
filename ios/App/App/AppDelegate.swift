@@ -876,7 +876,7 @@ final class PurinAudioFX {
         let player = AVAudioPlayerNode()
         engine.attach(player)
         var chain: [AVAudioNode] = [player]
-        if nr > 0 || vocal {
+        if nr > 0 || vocal, #available(iOS 16.0, *) {
             let desc = AudioComponentDescription(componentType: kAudioUnitType_Effect, componentSubType: kAudioUnitSubType_AUSoundIsolation, componentManufacturer: kAudioUnitManufacturer_Apple, componentFlags: 0, componentFlagsMask: 0)
             let iso = AVAudioUnitEffect(audioComponentDescription: desc)
             engine.attach(iso)
