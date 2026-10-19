@@ -249,6 +249,7 @@ input[type=checkbox]{width:18px;height:18px;accent-color:var(--cyan);margin:0}
 /* アプリ版：ステータスバー・ホームバーを避ける */
 html.native{height:100%;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
 html.natplay body,html.natplay #pv,html.natplay #fs{background:transparent!important}
+html.natplay #fs{overflow:hidden}html.natplay #fsCv{box-shadow:0 0 0 300vmax #000}
 html.native #home,html.native #fs{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);box-sizing:border-box}
 @media (min-width:900px){#app{max-width:520px;margin:0 auto;border-inline:1px solid var(--line)}}
 </style>
@@ -1164,8 +1165,8 @@ function renderTools(){const sel=S.sel,it=selItem();const key=sel&&it&&sel.kind!
   switch(sel.kind){
     case 'seg':label=srcMeta(it.src)?.name||'映像';acts=[['split','分割'],['adj','調整'],['del','削除']];if(it.gap>0)acts.push(['closegap','前の空白を詰める']);acts.push(['cutpanel','長さ調整']);break;
     case 'gap':label=`空白 ${it.gap.toFixed(1)}秒`;acts=[['delgap','空白を削除']];break;
-    case 'cap':label='字幕';acts=[['edit','編集'],['style','スタイル'],['anim','アニメ'],['split','分割'],['del','削除'],['caplist','字幕一覧']];break;
-    case 'ov':if(it.type==='img'){label='画像';acts=[['place','配置'],['adj','調整'],['stroke','縁取り'],['anim','アニメ'],['dup','複製'],['split','分割'],['del','削除']]}else{label='テキスト';acts=[['edit','編集'],['style','スタイル'],['anim','アニメ'],['dup','複製'],['split','分割'],['del','削除']]}break;
+    case 'cap':label='字幕';acts=[['edit','編集'],['style','スタイル'],['split','分割'],['anim','アニメ'],['del','削除'],['caplist','字幕一覧']];break;
+    case 'ov':if(it.type==='img'){label='画像';acts=[['place','配置'],['adj','調整'],['stroke','縁取り'],['anim','アニメ'],['dup','複製'],['split','分割'],['del','削除']]}else{label='テキスト';acts=[['edit','編集'],['style','スタイル'],['split','分割'],['anim','アニメ'],['dup','複製'],['del','削除']]}break;
     case 'sfx':label=sfxById(it.snd)?.name||'効果音';acts=[['vol','音量'],['dup','複製'],['del','削除']];break;
     case 'bgm':label='BGM';acts=[['vol','音量'],['del','削除']];break;
   }
@@ -2063,8 +2064,9 @@ async function saveExport(auto){if(!lastExport)return;if(NATIVE)return saveToPho
 /* ================= 全画面プレビュー ================= */
 let fsOn=false;const fsCv=$('#fsCv'),fsCtx=fsCv.getContext('2d');
 function fitFs(){const W=innerWidth,H=innerHeight,r=LW/LH;let h=H,w=h*r;if(w>W){w=W;h=w/r}fsCv.style.width=w+'px';fsCv.style.height=h+'px';const d=Math.min(2,devicePixelRatio||1);if(r<1){fsCv.height=Math.min(1920,Math.round(h*d));fsCv.width=Math.round(fsCv.height*r)}else{fsCv.width=Math.min(1920,Math.round(w*d));fsCv.height=Math.round(fsCv.width/r)}req()}
-function openFs(){fsOn=true;$('#fs').hidden=false;fitFs();NP.rect='';npBg();try{const el=$('#fs');const r=(el.requestFullscreen||el.webkitRequestFullscreen);if(r){const p=r.call(el);if(p&&p.catch)p.catch(()=>{})}}catch(e){}req()}
-function closeFs(){fsOn=false;$('#fs').hidden=true;NP.rect='';npBg();try{if(document.fullscreenElement&&document.exitFullscreen)document.exitFullscreen()}catch(e){}}
+function openFs(){fsOn=true;$('#fs').hidden=false;fitFs();NP.rect='';NP.chk=0;npBg();if(NATIVE){req();return} // アプリ版はブラウザの全画面機能を使わない（ネイティブの映像がずれるため）
+  try{const el=$('#fs');const r=(el.requestFullscreen||el.webkitRequestFullscreen);if(r){const p=r.call(el);if(p&&p.catch)p.catch(()=>{})}}catch(e){}req()}
+function closeFs(){fsOn=false;$('#fs').hidden=true;NP.rect='';NP.chk=0;npBg();try{if(document.fullscreenElement&&document.exitFullscreen)document.exitFullscreen()}catch(e){}}
 function drawFs(){drawFrame(fsCtx,fsCv.width,fsCv.height,S.tl,false,true);$('#fsTc').textContent=fmt(S.tl)+' / '+fmt(tlDur);if(document.activeElement!==$('#fsSeek'))$('#fsSeek').value=Math.round(S.tl/Math.max(.001,tlDur)*1000)}
 $('#bFull').addEventListener('click',openFs);$('#fsClose').addEventListener('click',closeFs);
 fsCv.addEventListener('click',()=>S.playing?pause():play());$('#fsPlay').addEventListener('click',()=>S.playing?pause():play());
