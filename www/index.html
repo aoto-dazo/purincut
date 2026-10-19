@@ -248,6 +248,7 @@ input[type=checkbox]{width:18px;height:18px;accent-color:var(--cyan);margin:0}
 .themebtn{margin-left:auto;font-size:13px;padding:7px 12px;border-radius:999px;white-space:nowrap}
 /* アプリ版：ステータスバー・ホームバーを避ける */
 html.native{height:100%;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+html.natplay body,html.natplay #pv,html.natplay #fs{background:transparent!important}
 html.native #home,html.native #fs{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);box-sizing:border-box}
 @media (min-width:900px){#app{max-width:520px;margin:0 auto;border-inline:1px solid var(--line)}}
 </style>
@@ -683,21 +684,24 @@ function itemVisual(o){if(o.type==='img'){const a=imgCanvas(o);return a?{cv:a.cv
 /* ================= フレーム描画 ================= */
 const tiny=document.createElement('canvas');tiny.width=36;tiny.height=64;const tctx=tiny.getContext('2d');
 let boxes=[],guides={xs:[],ys:[]};
-function drawFrame(ctx,W,H,tl,preview){
+function drawFrame(ctx,W,H,tl,preview,ovOnly){
   const rs=W/LW;ctx.setTransform(rs,0,0,rs,0,0);ctx.globalAlpha=1;ctx.filter='none';
-  ctx.fillStyle='#000';ctx.fillRect(0,0,LW,LH);
+  // アプリ版：映像はネイティブのプレーヤーが後ろに描くので、ここでは文字や画像だけを描く
+  const natV=(preview||ovOnly)&&typeof NP!=='undefined'&&NP.on&&!exporting;
+  if(natV)ctx.clearRect(0,0,LW,LH);else{ctx.fillStyle='#000';ctx.fillRect(0,0,LW,LH)}
   const sa=srcAt(tl);let el=null,vw=0,vh=0;const segA=sa?(segAtTl(tl)||{}).adj:null,aOn=adjOn(segA),useGL=aOn&&GLA.ok,aF=aOn&&!useGL&&FILTER_OK?adjFilter(segA):null;
   if(sa){const rt=SRC[sa.src];if(rt){if(rt.kind==='demo')rt.player.draw(sa.x);el=rt.el;vw=rt.vw;vh=rt.vh;
-    if(rt.fs&&rt.fs.ok&&(PB.mode==='wc'||!S.playing)){const c=rt.fs.render(sa.x);if(c){el=c;vw=c.width;vh=c.height}}}}
+    if(!natV&&rt.fs&&rt.fs.ok&&(PB.mode==='wc'||!S.playing)){const c=rt.fs.render(sa.x);if(c){el=c;vw=c.width;vh=c.height}}}}
   const ok=el&&vw>0;
   if(preview)boxes=[];
-  if(ok&&S.layout.bg==='blur'){
+  if(ok&&!natV&&S.layout.bg==='blur'){
     const r=vw/vh,tr=tiny.width/tiny.height;let sw=vw,sh=vh,sx=0,sy=0;if(r>tr){sw=vh*tr;sx=(vw-sw)/2}else{sh=vw/tr;sy=(vh-sh)/2}
     const gb=useGL?GLA.run(el,sx,sy,sw,sh,segA,false,tiny.width*2,tiny.height*2):null;if(gb)tctx.drawImage(gb,0,0,tiny.width,tiny.height);else{if(aF)tctx.filter=aF;tctx.drawImage(el,sx,sy,sw,sh,0,0,tiny.width,tiny.height);tctx.filter='none'}ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';ctx.drawImage(tiny,0,0,LW,LH);
     ctx.fillStyle=`rgba(0,0,0,${S.layout.bgDark})`;ctx.fillRect(0,0,LW,LH);
   }
   if(ok)for(const L of S.layout.layers){if(!L.on)continue;
     const sx=L.crop.x*vw,sy=L.crop.y*vh,sw=Math.max(2,L.crop.w*vw),sh=Math.max(2,L.crop.h*vh),dw=L.w*LW,dh=dw*sh/sw,x=L.cx*LW-dw/2,y=L.cy*LH-dh/2;
+    if(natV){if(preview)boxes.push({kind:'layer',id:L.id,cx:L.cx*LW,cy:L.cy*LH,hw:dw/2,hh:dh/2,rot:0});continue}
     ctx.save();const rad=Math.min(L.radius,dw/2,dh/2);
     if(rad>0){ctx.beginPath();ctx.roundRect?ctx.roundRect(x,y,dw,dh,rad):ctx.rect(x,y,dw,dh);ctx.clip()}
     const g=(useGL||(L.fx&&!FILTER_OK&&GLA.ok))?GLA.run(el,sx,sy,sw,sh,segA,L.fx,dw*rs,dh*rs):null;
@@ -749,7 +753,7 @@ class VPlayer{constructor(el){this.el=el;this.want=0;this.pending=false;el.addEv
 function newVideoEl(){const v=document.createElement('video');v.playsInline=true;v.setAttribute('playsinline','');v.setAttribute('webkit-playsinline','');v.preload='auto';$('#vids').appendChild(v);return v}
 /* ================= アプリ版（iPhoneネイティブ機能） ================= */
 const NATIVE=!!(window.Capacitor&&window.Capacitor.isNativePlatform&&window.Capacitor.isNativePlatform());if(NATIVE)document.documentElement.classList.add('native');
-function nat(method,opts={}){const C=window.Capacitor;const P=C&&C.Plugins&&C.Plugins.PurinNative;if(P&&typeof P[method]==='function')return P[method](opts);return C.nativePromise('PurinNative',method,opts)}
+function nat(method,opts={}){try{const C=window.Capacitor;const P=C&&C.Plugins&&C.Plugins.PurinNative;if(P&&typeof P[method]==='function')return P[method](opts);return C.nativePromise('PurinNative',method,opts)}catch(e){return Promise.reject(e)}}
 // 写真アプリから選んだ動画（アプリ内に無圧縮でコピー済み）を素材にする
 async function makeVideoSourceNative(info,forceId){let v=newVideoEl();v.src=info.url;try{v.load()}catch(e){}
   const wait=v=>new Promise((res,rej)=>{v.onloadedmetadata=res;v.onerror=()=>rej(new Error('load'));setTimeout(()=>rej(new Error('timeout')),12000)});
@@ -940,7 +944,7 @@ function ensureAudio(){
   for(const id in SRC)hookAudio(id);
   if(actx.state==='suspended'&&!exporting)actx.resume();
 }
-function applyVol(){if(!actx)return;origG.gain.value=S.audio.orig;sfxG.gain.value=S.audio.sfx;bgmG.gain.value=S.audio.bgm}
+function applyVol(){if(typeof NP!=='undefined'&&NP.on)nat('playerVolume',{v:S.audio.orig}).catch(()=>{});if(!actx)return;origG.gain.value=S.audio.orig;sfxG.gain.value=S.audio.sfx;bgmG.gain.value=S.audio.bgm}
 async function analyzeAudio(buf){
   const n=Math.ceil(buf.duration*100),sr=buf.sampleRate,win=Math.floor(sr/100),chs=[];for(let c=0;c<buf.numberOfChannels;c++)chs.push(buf.getChannelData(c));
   const pk=new Float32Array(n),rm=new Float32Array(n);
@@ -1101,7 +1105,7 @@ async function enterAt(t,force){const p=pieceAt(t);PB.p=p;
     if(!S.playing)return;try{await pl.play()}catch(e){}prepareNext(p)}
   else{pauseAll(null);PB.mode='clock';PB.t0=t;PB.n0=performance.now();const nx=eff.find(q=>q.t>t+1e-6);PB.end=p?p.t+plen(p):(nx?nx.t:tlDur)}}
 function fireSfx(a,b){if(b-a>.6||b<a)return;for(const x of S.sfx){if(x.t>a&&x.t<=b)playBuf(sfxById(x.snd)?.buf,0,x.vol)}}
-function tick(){if(!S.playing||PB.wait)return;if(PB.mode==='wc')return wcTick();let t;
+function tick(){if(!S.playing||PB.wait)return;if(PB.mode==='nat')return natTick();if(PB.mode==='wc')return wcTick();let t;
   if(PB.mode==='media'){const p=PB.p,pl=playerOf(p.src);const x=pl.currentTime;
     // 再生開始直後に位置がずれていたら（シークが無視された場合）指定位置へ戻す
     const c=PB.chk;if(c&&pl.el&&!pl.paused){const el=(performance.now()-c.n)/1000;if(el>1.6)PB.chk=null;else if(el>.25&&c.k<2&&Math.abs(x-(c.x+el))>.5){c.k++;const tt=c.t+el;PB.chk=null;enterAt(tt,true);return}}
@@ -1115,10 +1119,11 @@ function tick(){if(!S.playing||PB.wait)return;if(PB.mode==='wc')return wcTick();
 function advance(t){fireSfx(lastTl,t);lastTl=t;S.tl=t;dirty=true;if(t>=tlDur-1e-3){S.tl=tlDur;finishPlay();return}enterAt(t+1e-4)}
 function finishPlay(){pause();if(exporting&&exporting.done)exporting.done()}
 async function play(){if(tlDur<=0)return;ensureAudio();if(S.tl>=tlDur-.05)S.tl=0;S.playing=true;lastTl=S.tl;setPlayIco();
+  if(typeof NP!=='undefined'&&NP.on&&NP.ready&&!exporting){pauseAll(null);PB.mode='nat';PB.nt0=S.tl;PB.n0=performance.now();PB.sync=0;const t0=S.tl;nat('playerPlay',{t:t0}).then(r=>{if(PB.mode==='nat'){PB.nt0=r.t;PB.n0=performance.now()}}).catch(()=>{});startBgm(S.tl);return}
   if(wcReady()){if(actx.state!=='running')try{await actx.resume()}catch(e){}wcStart(S.tl);startBgm(S.tl);return}await enterAt(S.tl,true);startBgm(S.tl)}
-function pause(){S.playing=false;PB.wait=false;PB.pre=null;wcStop();if(PB.mode==='wc')PB.mode=null;pauseAll(null);for(const k in SRC)for(const e of SRC[k].els||[])elGain(e,1);stopBgm();setPlayIco();req()}
+function pause(){S.playing=false;PB.wait=false;PB.pre=null;wcStop();if(PB.mode==='nat'){nat('playerPause').catch(()=>{})}if(PB.mode==='wc'||PB.mode==='nat')PB.mode=null;pauseAll(null);for(const k in SRC)for(const e of SRC[k].els||[])elGain(e,1);stopBgm();setPlayIco();req()}
 function setPlayIco(){const p=S.playing?'<path d="M7 4h4v16H7zM14 4h4v16h-4z"/>':'<path d="M7 4v16l13-8z"/>';$('#playIco').innerHTML=p;$('#fsIco').innerHTML=p}
-function seekPreview(){const p=pieceAt(S.tl);if(p){const rt=SRC[p.src];if(rt&&rt.kind==='video')rt.player.currentTime=p.s+(S.tl-p.t)}req()}
+function seekPreview(){if(typeof NP!=='undefined'&&NP.on)nat('playerSeek',{t:S.tl}).catch(()=>{});const p=pieceAt(S.tl);if(p){const rt=SRC[p.src];if(rt&&rt.kind==='video')rt.player.currentTime=p.s+(S.tl-p.t)}req()}
 
 /* ================= 選択とツールバー ================= */
 function selItem(sel=S.sel){if(!sel)return null;const k=sel.kind;
@@ -2015,9 +2020,9 @@ async function saveExport(auto){if(!lastExport)return;if(NATIVE)return saveToPho
 /* ================= 全画面プレビュー ================= */
 let fsOn=false;const fsCv=$('#fsCv'),fsCtx=fsCv.getContext('2d');
 function fitFs(){const W=innerWidth,H=innerHeight,r=LW/LH;let h=H,w=h*r;if(w>W){w=W;h=w/r}fsCv.style.width=w+'px';fsCv.style.height=h+'px';const d=Math.min(2,devicePixelRatio||1);if(r<1){fsCv.height=Math.min(1920,Math.round(h*d));fsCv.width=Math.round(fsCv.height*r)}else{fsCv.width=Math.min(1920,Math.round(w*d));fsCv.height=Math.round(fsCv.width/r)}req()}
-function openFs(){fsOn=true;$('#fs').hidden=false;fitFs();try{const el=$('#fs');const r=(el.requestFullscreen||el.webkitRequestFullscreen);if(r){const p=r.call(el);if(p&&p.catch)p.catch(()=>{})}}catch(e){}req()}
-function closeFs(){fsOn=false;$('#fs').hidden=true;try{if(document.fullscreenElement&&document.exitFullscreen)document.exitFullscreen()}catch(e){}}
-function drawFs(){drawFrame(fsCtx,fsCv.width,fsCv.height,S.tl,false);$('#fsTc').textContent=fmt(S.tl)+' / '+fmt(tlDur);if(document.activeElement!==$('#fsSeek'))$('#fsSeek').value=Math.round(S.tl/Math.max(.001,tlDur)*1000)}
+function openFs(){fsOn=true;$('#fs').hidden=false;fitFs();NP.rect='';npBg();try{const el=$('#fs');const r=(el.requestFullscreen||el.webkitRequestFullscreen);if(r){const p=r.call(el);if(p&&p.catch)p.catch(()=>{})}}catch(e){}req()}
+function closeFs(){fsOn=false;$('#fs').hidden=true;NP.rect='';npBg();try{if(document.fullscreenElement&&document.exitFullscreen)document.exitFullscreen()}catch(e){}}
+function drawFs(){drawFrame(fsCtx,fsCv.width,fsCv.height,S.tl,false,true);$('#fsTc').textContent=fmt(S.tl)+' / '+fmt(tlDur);if(document.activeElement!==$('#fsSeek'))$('#fsSeek').value=Math.round(S.tl/Math.max(.001,tlDur)*1000)}
 $('#bFull').addEventListener('click',openFs);$('#fsClose').addEventListener('click',closeFs);
 fsCv.addEventListener('click',()=>S.playing?pause():play());$('#fsPlay').addEventListener('click',()=>S.playing?pause():play());
 $('#fsSeek').addEventListener('input',e=>{pause();S.tl=+e.target.value/1000*tlDur;seekPreview()});
@@ -2046,7 +2051,28 @@ document.addEventListener('pointerdown',()=>{if(!actx)ensureAudio()},{once:true}
 new ResizeObserver(()=>layout()).observe($('#app'));
 new ResizeObserver(()=>{fitPreview()}).observe($('#stage'));
 new ResizeObserver(()=>{fitTl()}).observe($('#tlwrap'));
-function loop(){tick();if(pp.hold)dirty=true;
+/* ================= アプリ版：ネイティブのプレビュー再生 ================= */
+const NP={on:false,ready:false,sig:'',busy:false,chk:0,rect:''};
+function npEligible(){if(!NATIVE||exporting)return false;const ids=new Set(S.segments.map(g=>g.src));if(!ids.size)return false;
+  for(const id of ids){const m=srcMeta(id);if(!m||!m.nat||!SRC[id])return false}return true}
+function npProject(){return{W:LW,H:LH,fps:projFps(),pieces:eff.map(p=>({name:srcMeta(p.src).nat,s:p.s,e:p.e,t:p.t})),
+  layout:{bg:S.layout.bg,bgDark:S.layout.bgDark,layers:S.layout.layers.map(L=>({on:L.on,crop:L.crop,w:L.w,cx:L.cx,cy:L.cy,radius:L.radius,border:L.border,bc:L.bc,fx:!!L.fx}))},
+  adj:S.segments.filter(g=>adjOn(g.adj)).map(g=>Object.assign({t0:g._t,t1:g._t1},g.adj))}}
+function npBg(){if(!NP.on)return;const c=fsOn?'#000000':getComputedStyle(document.documentElement).getPropertyValue('--bg').trim();nat('setBackground',{color:c}).catch(()=>{})}
+function npOff(){if(!NP.on)return;NP.on=false;NP.ready=false;NP.sig='';NP.rect='';if(PB.mode==='nat')pause();document.documentElement.classList.remove('natplay');nat('playerRect',{visible:false}).catch(()=>{});req()}
+function npUpdate(){const now=performance.now();if(now-NP.chk<200)return;NP.chk=now;
+  if(!npEligible()){npOff();return}
+  const sig=JSON.stringify(npProject());
+  if(sig!==NP.sig&&!NP.busy){NP.sig=sig;NP.busy=true;nat('playerSetProject',JSON.parse(sig)).then(()=>{NP.busy=false;NP.ready=true;
+      if(!NP.on){NP.on=true;document.documentElement.classList.add('natplay');npBg();applyVol();seekPreview()}req()})
+    .catch(e=>{NP.busy=false;console.warn('native player',e);npOff();NP.sig=sig})}
+  if(NP.on){const el=fsOn?fsCv:pv,r=el.getBoundingClientRect(),vis=$('#home').hidden;const rs=[r.left,r.top,r.width,r.height,vis].map(v=>typeof v==='number'?v.toFixed(1):v).join(',');
+    if(rs!==NP.rect){NP.rect=rs;nat('playerRect',{x:r.left,y:r.top,w:r.width,h:r.height,visible:vis}).catch(()=>{})}}}
+function natTick(){const now=performance.now();let t=PB.nt0+(now-PB.n0)/1000;
+  if(now-(PB.sync||0)>400){PB.sync=now;nat('playerTime').then(r=>{if(PB.mode!=='nat'||!r.playing)return;const n2=performance.now(),est=PB.nt0+(n2-PB.n0)/1000;if(Math.abs(est-r.t)>.03){PB.nt0=r.t;PB.n0=n2}}).catch(()=>{})}
+  if(t>=tlDur-1e-3){fireSfx(lastTl,tlDur);lastTl=tlDur;S.tl=tlDur;finishPlay();return}
+  fireSfx(lastTl,t);lastTl=t;S.tl=t;dirty=true}
+function loop(){tick();if(NATIVE)npUpdate();if(pp.hold)dirty=true;
   if(exporting){const x=exporting;drawFrame(x.ctx,x.W,x.H,S.tl,false);x.n++;if(x.n%5===0){drawFrame(pctx,pv.width,pv.height,S.tl,true);drawTl();$('#tcCur').textContent=fmt(S.tl);const b=$('#expBar');if(b)b.style.width=(S.tl/Math.max(.001,tlDur)*100).toFixed(1)+'%';const i=$('#expInfo');if(i)i.textContent=`書き出し中… ${fmt(S.tl)} / ${fmt(tlDur)}`}}
   else if(dirty){dirty=false;drawFrame(pctx,pv.width,pv.height,S.tl,true);drawTl();$('#tcCur').textContent=fmt(S.tl);if(fsOn)drawFs()}
   if(animTilesOn())drawAnimTiles();
@@ -2073,7 +2099,7 @@ lockZoom();document.addEventListener('focusout',()=>setTimeout(lockZoom,50));
 // 画面の明るさ：自動（端末の設定に合わせる）／ライト／ダーク
 const THEMES=[['auto','自動'],['light','ライト'],['dark','ダーク']];
 function applyTheme(){const t=LS.get('kiri.theme','auto');if(t==='auto')delete document.documentElement.dataset.theme;else document.documentElement.dataset.theme=t;
-  const b=$('#hTheme');if(b)b.textContent='表示：'+THEMES.find(x=>x[0]===t)[1];toolsKey=null;renderTools();req();if(S.panel)renderPanel()}
+  if(typeof NP!=='undefined')setTimeout(npBg,50);const b=$('#hTheme');if(b)b.textContent='表示：'+THEMES.find(x=>x[0]===t)[1];toolsKey=null;renderTools();req();if(S.panel)renderPanel()}
 $('#hTheme').addEventListener('click',()=>{const t=LS.get('kiri.theme','auto'),i=THEMES.findIndex(x=>x[0]===t);LS.set('kiri.theme',THEMES[(i+1)%3][0]);applyTheme()});
 try{matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>{req()})}catch(e){}
 async function boot(){
