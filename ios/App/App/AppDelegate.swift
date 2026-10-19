@@ -272,6 +272,63 @@ public class PurinNativePlugin: CAPPlugin, CAPBridgedPlugin, PHPickerViewControl
         guard let name = call.getString("name") else { call.reject("name がありません"); return }
         let from = call.getDouble("from") ?? 0
         let to = call.getDouble("to") ?? -1
+        // iOS 26以降：新しい長文向けの音声認識（SpeechAnalyzer）を使う。使えなければ従来の方式
+        if #available(iOS 26.0, *) {
+            Task {
+                do {
+                    let segs = try await self.transcribeModern(name: name, from: from, to: to)
+                    if !segs.isEmpty { call.resolve(["segments": segs, "engine": "SpeechAnalyzer"]); return }
+                } catch {
+                    print("SpeechAnalyzer failed: \(error)")
+                }
+                self.transcribeLegacy(call, name: name, from: from, to: to)
+            }
+            return
+        }
+        transcribeLegacy(call, name: name, from: from, to: to)
+    }
+
+    @available(iOS 26.0, *)
+    func transcribeModern(name: String, from: Double, to: Double) async throws -> [[String: Any]] {
+        let asset = AVURLAsset(url: mediaURL(name))
+        let total = CMTimeGetSeconds(try await asset.load(.duration))
+        let start = max(0, from), end = to > 0 ? min(to, total) : total
+        guard end - start > 0.2 else { return [] }
+        guard let part = await exportAudio(asset: asset, start: start, length: end - start, idx: 999) else {
+            throw NSError(domain: "purin", code: 30, userInfo: [NSLocalizedDescriptionKey: "音声を取り出せませんでした"])
+        }
+        defer { try? FileManager.default.removeItem(at: part) }
+        guard let loc = await SpeechTranscriber.supportedLocale(equivalentTo: Locale(identifier: "ja-JP")) else {
+            throw NSError(domain: "purin", code: 31, userInfo: [NSLocalizedDescriptionKey: "日本語に対応していません"])
+        }
+        let transcriber = SpeechTranscriber(locale: loc, transcriptionOptions: [], reportingOptions: [], attributeOptions: [.audioTimeRange])
+        if let req = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
+            try await req.downloadAndInstall()
+        }
+        let analyzer = SpeechAnalyzer(modules: [transcriber])
+        let collector = Task { () throws -> [[String: Any]] in
+            var out: [[String: Any]] = []
+            for try await r in transcriber.results {
+                if !r.isFinal { continue }
+                for run in r.text.runs {
+                    guard let tr = run.audioTimeRange else { continue }
+                    let txt = String(r.text[run.range].characters)
+                    if txt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { continue }
+                    out.append(["text": txt, "s": start + CMTimeGetSeconds(tr.start), "e": start + CMTimeGetSeconds(tr.end)])
+                }
+            }
+            return out
+        }
+        let file = try AVAudioFile(forReading: part)
+        if let last = try await analyzer.analyzeSequence(from: file) {
+            try await analyzer.finalizeAndFinish(through: last)
+        } else {
+            await analyzer.cancelAndFinishNow()
+        }
+        return try await collector.value
+    }
+
+    func transcribeLegacy(_ call: CAPPluginCall, name: String, from: Double, to: Double) {
         SFSpeechRecognizer.requestAuthorization { status in
             guard status == .authorized else { call.reject("音声認識が許可されていません（設定アプリ → ぷりんCut で許可してください）"); return }
             guard let rec = SFSpeechRecognizer(locale: Locale(identifier: "ja-JP")), rec.isAvailable else {
