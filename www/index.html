@@ -238,6 +238,9 @@ input[type=checkbox]{width:18px;height:18px;accent-color:var(--cyan);margin:0}
 #vids video{width:2px;height:2px}
 .hidden-in{display:none}
 @media (prefers-reduced-motion:reduce){#toast{transition:none}}
+/* アプリ版：ステータスバー・ホームバーを避ける */
+html.native{height:100%;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+html.native #home,html.native #fs{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);box-sizing:border-box}
 @media (min-width:900px){#app{max-width:520px;margin:0 auto;border-inline:1px solid var(--line)}}
 </style>
 
@@ -735,11 +738,14 @@ class VPlayer{constructor(el){this.el=el;this.want=0;this.pending=false;el.addEv
   set currentTime(v){this.want=v;if(this.el.seeking){this.pending=true;return}this._go()}play(){return this.el.play()}pause(){this.el.pause()}get paused(){return this.el.paused}get ended(){return this.el.ended}}
 function newVideoEl(){const v=document.createElement('video');v.playsInline=true;v.setAttribute('playsinline','');v.setAttribute('webkit-playsinline','');v.preload='auto';$('#vids').appendChild(v);return v}
 /* ================= アプリ版（iPhoneネイティブ機能） ================= */
-const NATIVE=!!(window.Capacitor&&window.Capacitor.isNativePlatform&&window.Capacitor.isNativePlatform());
+const NATIVE=!!(window.Capacitor&&window.Capacitor.isNativePlatform&&window.Capacitor.isNativePlatform());if(NATIVE)document.documentElement.classList.add('native');
 function nat(method,opts={}){const C=window.Capacitor;const P=C&&C.Plugins&&C.Plugins.PurinNative;if(P&&typeof P[method]==='function')return P[method](opts);return C.nativePromise('PurinNative',method,opts)}
 // 写真アプリから選んだ動画（アプリ内に無圧縮でコピー済み）を素材にする
-async function makeVideoSourceNative(info,forceId){const v=newVideoEl();v.src=info.url;try{v.load()}catch(e){}
-  try{await new Promise((res,rej)=>{v.onloadedmetadata=res;v.onerror=()=>rej(new Error('load'));setTimeout(()=>rej(new Error('timeout')),15000)})}catch(e){v.remove();throw e}
+async function makeVideoSourceNative(info,forceId){let v=newVideoEl();v.src=info.url;try{v.load()}catch(e){}
+  const wait=v=>new Promise((res,rej)=>{v.onloadedmetadata=res;v.onerror=()=>rej(new Error('load'));setTimeout(()=>rej(new Error('timeout')),12000)});
+  try{await wait(v)}catch(e){ // 直接読めないときはメモリに読み込んで再生
+    v.remove();status('動画を読み込み中…（メモリに展開）');const b=await (await fetch(info.url)).blob();v=newVideoEl();v.src=URL.createObjectURL(b);try{v.load()}catch(_){}
+    try{await wait(v)}catch(e2){v.remove();throw new Error('動画を再生できませんでした')}}
   const id=forceId||uid('v');SRC[id]={kind:'video',el:v,player:new VPlayer(v),get vw(){return v.videoWidth},get vh(){return v.videoHeight},peaks:null,rms:null,audioBuf:null,file:null,nat:info.name};
   v.addEventListener('seeked',req);v.addEventListener('loadeddata',req);hookAudio(id);
   return{id,kind:'video',name:info.displayName||info.name,dur:isFinite(v.duration)?v.duration:(info.duration||0),fileKey:'nat:'+info.name,nat:info.name,fps:info.fps?snapFps(info.fps):0}}
@@ -1260,18 +1266,28 @@ tlc.addEventListener('pointermove',e=>{if(!tp.ptr.has(e.pointerId))return;tp.ptr
       else if(k==='cap'){let sa=srcAt(nt);if(!sa){const nx=eff.find(p=>p.t>nt);if(nx)sa={src:nx.src,x:nx.s}}if(sa){const L=o.e-o.s;it.src=sa.src;it.s=sa.x;it.e=sa.x+L}}}
     else if(tp.mode==='trimL'){let nt=clamp(tp.t0+dt,0,tp.t1-.1);nt=Math.min(nt+snapT([nt]),tp.t1-.1);
       if(k==='bgm'){const end=o.t+(o.len??Math.max(.5,tlDur-o.t));S.bgmClip.t=nt;S.bgmClip.offset=Math.max(0,(o.offset||0)+(nt-o.t));S.bgmClip.len=Math.max(.3,end-nt)}
-      else if(k==='ov'){const end=o.t+o.d;it.t=nt;it.d=Math.max(.1,end-nt)}
+      else if(k==='ov'){const end=o.t+o.d;const lim=Math.max(0,...S.overlays.filter(x=>x!==it&&x.track===it.track&&x.t+x.d<=end-1e-3).map(x=>x.t+x.d));nt=Math.max(nt,lim);it.t=nt;it.d=Math.max(.1,end-nt)}
       else if(k==='cap'){const sa=srcAt(nt);if(sa&&sa.src===it.src)it.s=Math.min(sa.x,it.e-.1)}}
     else{let nt=clamp(tp.t1+dt,tp.t0+.1,Math.max(tlDur,tp.t1+dt));nt=Math.max(nt+snapT([nt]),tp.t0+.1);
       if(k==='bgm')S.bgmClip.len=Math.max(.3,nt-S.bgmClip.t);
-      else if(k==='ov')it.d=Math.max(.1,nt-it.t);
+      else if(k==='ov'){const nx=S.overlays.filter(x=>x!==it&&x.track===it.track&&x.t>=it.t+1e-3).map(x=>x.t);if(nx.length)nt=Math.min(nt,Math.min(...nx));it.d=Math.max(.1,nt-it.t)}
       else if(k==='cap'){const sa=srcAt(Math.max(0,nt-1e-3));if(sa&&sa.src===it.src)it.e=Math.max(sa.x+1e-3,it.s+.1)}}
     if(k==='cap')S.captions.sort((a,b)=>a.s-b.s);
     req()}});
+// 同じトラックで重なった部分は、動かしたクリップで上書き（Premiereの上書きと同じ。二重表示を防ぐ）
+function overwriteOv(it){const a=it.t,b=it.t+it.d;let hit=false;
+  for(const x of S.overlays.slice()){if(x===it||x.track!==it.track)continue;const xa=x.t,xb=x.t+x.d;if(xb<=a+1e-3||xa>=b-1e-3)continue;hit=true;
+    if(xa>=a-1e-3&&xb<=b+1e-3){S.overlays.splice(S.overlays.indexOf(x),1);continue}
+    if(xa<a&&xb>b){const tail=Object.assign(clone(Object.assign({},x,{img:undefined,_ac:undefined})),{id:uid('o'),t:b,d:xb-b});tail.img=x.img;x.d=a-xa;S.overlays.push(tail);continue}
+    if(xa<a)x.d=Math.max(.05,a-xa);else{x.t=b;x.d=Math.max(.05,xb-b)}}
+  if(hit)toast('重なった部分を上書きしました')}
 const tlUp=e=>{if(!tp.ptr.has(e.pointerId))return;const n=tp.ptr.size;tp.ptr.delete(e.pointerId);clearTimeout(tp.timer);
   if(tp.mode==='pinch'){if(!tp.ptr.size)tp.mode=null;return}
   if(n===1&&tp.mode==='pending'&&e.type==='pointerup')tlTap(e);
-  else if(tp.pushed){autosave();fitTl();renderPanel()}
+  else if(tp.pushed){const it=selItem();
+    // 同じトラックで他のテキスト・画像と重なったら、空いているトラックへ移す（二重に表示されないように）
+    if(it&&S.sel.kind==='ov')overwriteOv(it);
+    autosave();fitTl();renderPanel()}
   else if(tp.lifted)select(S.sel);
   tp.mode=null;tp.lifted=false;tp.snapT=null;req()};
 tlc.addEventListener('pointerup',tlUp);tlc.addEventListener('pointercancel',tlUp);
@@ -1775,7 +1791,7 @@ async function saveProject(manual){if(!PJ.id){if(manual)toast('デモは保存�
     if(manual)toast('保存しました');return true}
   catch(e){console.warn(e);toast('保存できませんでした（端末の空き容量が足りない可能性があります）',3500);return false}
   finally{saving=false;if(saveAgain){saveAgain=false;setTimeout(()=>saveProject(false),300)}}}
-async function openProject(f,aspect){pause();status('動画を読み込み中…');ensureAudio();let meta;try{meta=await makeAnySource(f)}catch(err){status('');toast('この動画形式は読み込めませんでした');return}
+async function openProject(f,aspect){pause();status('動画を読み込み中…');ensureAudio();let meta;try{meta=await makeAnySource(f)}catch(err){status('');toast('この動画は読み込めませんでした（'+(err&&err.message||err)+'）',6000);return}
   clearSources(meta.id);setAspect(aspect||'v');
   S.sources=[meta];Object.assign(S,{segments:[{id:uid('g'),src:meta.id,s:0,e:meta.dur,gap:0}],captions:[],overlays:[],sfx:[],chars:[],sel:null,tl:0,tlY:0});S.layout=defaultLayout(aspect==='h'?'fit':'blur');
   bgm=null;S.bgmClip={t:0,len:null,offset:0};hist.length=0;fut.length=0;
@@ -1812,7 +1828,7 @@ function hideHome(){$('#home').hidden=true;layout()}
 let delArm={id:null,t:0};
 $('#home').addEventListener('click',e=>{const t=e.target;
   if(t.closest('#hNew')){$('#hAspect').hidden=!$('#hAspect').hidden;return}
-  const a=t.closest('[data-asp]');if(a){PJ.pending=a.dataset.asp;ensureAudio();if(NATIVE){pickNativeVideo().then(info=>{if(info)openProject(info,PJ.pending||'v')}).catch(e=>toast('動画を読み込めませんでした（'+(e&&e.message||e)+'）',3500))}else $('#fVideo').click();return}
+  const a=t.closest('[data-asp]');if(a){PJ.pending=a.dataset.asp;ensureAudio();if(NATIVE){status('写真を選んでください…');pickNativeVideo().then(info=>{status('');if(info)openProject(info,PJ.pending||'v')}).catch(e=>{status('');toast('動画を選べませんでした（'+(e&&e.message||e)+'）',6000)})}else $('#fVideo').click();return}
   if(t.closest('#hDemo')){PJ.id=null;setAspect('v');setupDemo();hideHome();return}
   const o=t.closest('[data-open]');if(o){openSaved(o.dataset.open);return}
   const d=t.closest('[data-del]');if(d){const id=d.dataset.del;if(delArm.id===id&&Date.now()-delArm.t<3000){deleteProject(id);delArm.id=null}else{delArm={id,t:Date.now()};d.textContent='もう一度で削除'}return}});
