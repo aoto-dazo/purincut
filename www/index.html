@@ -628,7 +628,7 @@ function textCanvas(text,s){
     if(G&&G.on&&G.stops&&G.stops.length>1){const wj=ws[j],x0=al==='left'?pad:al==='right'?pad+tw-wj:W0/2-wj/2,cxg=x0+wj/2,cyg=ly(j),a=(G.ang||0)*Math.PI/180,ex=Math.sin(a)*wj/2,ey=Math.cos(a)*s.size*.5;
       const g=x.createLinearGradient(cxg-ex,cyg-ey,cxg+ex,cyg+ey);G.stops.forEach((c,k)=>g.addColorStop(k/(G.stops.length-1),c));x.fillStyle=g}else x.fillStyle=s.fill;
     x.fillText(l,lx,ly(j))})}
-  c=applyShadows(b,sh,1/fz);c._k=1/fz;
+  c=applyShadows(b,sh,1/fz);c._k=1/fz;c._va=(lines.length-1)*lh/2;
   if(ready){if(textCache.size>400)textCache.clear();textCache.set(key,c)}
   return c;
 }
@@ -687,7 +687,7 @@ function itemVisual(o){if(o.type==='img'){const a=imgCanvas(o);return a?{cv:a.cv
 const tiny=document.createElement('canvas');tiny.width=36;tiny.height=64;const tctx=tiny.getContext('2d');
 let boxes=[],guides={xs:[],ys:[]};
 /* 字幕のまとめて変更：OKを押すまでは見た目だけ変えて確認できる */
-function bulkStyle(base){const b=S.ui.bulk;let st=b.tpl?normStyle(clone((allTpl().find(t=>t.id===b.tpl)||{}).style||base)):clone(base);st.x=b.x;st.y=b.y;st.align=b.align;setFontSize(st,b.size);return st}
+function bulkStyle(base){const b=S.ui.bulk;let st=b.tpl?normStyle(clone((allTpl().find(t=>t.id===b.tpl)||{}).style||base)):clone(base);st.x=b.x;st.y=b.y;st.align=b.align;st.va=b.va;setFontSize(st,b.size);return st}
 const BKC=new WeakMap();
 function bulkView(c){const b=S.ui&&S.ui.bulk;if(!b||!b.dirty||S.panel!=='cap')return c.style;const key=JSON.stringify(b),h=BKC.get(c);if(h&&h.key===key&&h.src===c.style)return h.st;const st=bulkStyle(c.style);BKC.set(c,{key,src:c.style,st});return st}
 function drawFrame(ctx,W,H,tl,preview,ovOnly){
@@ -734,7 +734,7 @@ function drawFrame(ctx,W,H,tl,preview,ovOnly){
 }
 function drawItem(ctx,cv,k,st,A,rs,lt,hit){
   const bsy=k*(st.scale??100)/100,bsx=st.uni===false?k*(st.scaleW??st.scale??100)/100:bsy,bs=bsy,w=cv.width*bsx,h=cv.height*bsy;
-  const x=st.x*LW+A.shx,y=st.y*LH+A.shy,br=(st.rot||0)*Math.PI/180,ar=(A.rot+A.sht)*Math.PI/180,rot=br+ar;
+  const x=st.x*LW+A.shx,y=st.y*LH+A.shy-(st.va==='bot'?(cv._va||0)*(st.scale??100)/100:0),br=(st.rot||0)*Math.PI/180,ar=(A.rot+A.sht)*Math.PI/180,rot=br+ar;
   ctx.save();ctx.translate(x,y);ctx.rotate(br);ctx.translate(A.dx*LW,A.dy*LH);ctx.rotate(ar);ctx.scale(A.sx,A.sy);ctx.translate(-A.ax*LW,-A.ay*LH);
   const alpha=clamp(A.op*(st.op??100)/100,0,1);ctx.globalAlpha=alpha;
   if(FILTER_OK){const f=[];if(A.bright)f.push(`brightness(${Math.max(0,1+A.bright/55)})`);if(A.sat!==1)f.push(`saturate(${A.sat})`);if(A.blur>.3)f.push(`blur(${A.blur*rs*.8}px)`);ctx.filter=f.length?f.join(' '):'none'}
@@ -1600,7 +1600,9 @@ const I2={al:'<path d="M4 3v18M8 7h10v4H8zM8 14h6v4H8z"/>',ac:'<path d="M12 3v18
 /* --- 共通の中身 --- */
 function scaleRows(s){return `<div class="prow"><span>スケール</span><div class="pv">${s.uni===false?`<span class="nf">幅</span>${num('scaleW',s.scaleW??s.scale,{min:1,unit:' %',label:'幅'})}<span class="nf">高さ</span>${num('scale',s.scale,{min:1,unit:' %',label:'高さ'})}`:num('scale',s.scale,{min:1,unit:' %'})}</div></div>
   <div class="prow"><span></span><label class="allsw" style="padding:0"><input type="checkbox" data-p="uni" ${s.uni!==false?'checked':''} data-rerender="1">縦横比を固定</label></div>`}
-function placeSub(s,noScale){return `<div class="prow"><span>整列</span><div class="algn">${[['l','al','左揃え'],['c','ac','水平中央'],['r','ar','右揃え'],['t','at','上揃え'],['m','am','垂直中央'],['b','ab','下揃え']].map(([v,ic,t])=>`<button data-act="align" data-v="${v}" aria-label="${t}" title="${t}">${SVG(I2[ic])}</button>`).join('')}</div></div>
+function vaRow(s){return `<div class="prow"><span>基準</span><span class="seg">${[['bot','下の行に合わせる'],['mid','中央に合わせる']].map(([v,l])=>`<button data-act="va" data-v="${v}" class="${(s.va||'mid')===v?'on':''}">${l}</button>`).join('')}</span></div><p class="hint" style="margin:0 0 6px">下の行に合わせると、2行になっても下の行の位置は動かず上に伸びます。</p>`}
+function sizeRow(s){return `<div class="prow"><span>サイズ</span><div class="pv" style="flex-wrap:nowrap"><input type="range" data-p="size" data-mul="1" data-dec="0" min="16" max="${Math.max(260,Math.ceil(s.size))}" step="1" value="${s.size}" aria-label="フォントサイズ">${num('size',s.size,{min:8})}</div></div>`}
+function placeSub(s,noScale){return `${noScale?sizeRow(s)+vaRow(s):''}<div class="prow"><span>整列</span><div class="algn">${[['l','al','左揃え'],['c','ac','水平中央'],['r','ar','右揃え'],['t','at','上揃え'],['m','am','垂直中央'],['b','ab','下揃え']].map(([v,ic,t])=>`<button data-act="align" data-v="${v}" aria-label="${t}" title="${t}">${SVG(I2[ic])}</button>`).join('')}</div></div>
   <div class="prow"><span>位置</span><div class="pv">${num('x',s.x,{mul:LW,dec:1,unit:' X',label:'位置X'})}${num('y',s.y,{mul:LH,dec:1,unit:' Y',label:'位置Y'})}</div></div>
 ${noScale?'':scaleRows(s)}
   <div class="prow"><span>回転</span><div class="pv">${num('rot',s.rot,{unit:' °'})}</div></div>
@@ -1627,11 +1629,12 @@ function animSub(s){const cat=S.ui.acat;const cur=s.anims.find(n=>catOf(n)===cat
   <div class="agrid"><button class="at ${cur?'':'on'}" data-anim="" data-cat="${cat}"><span class="tile">${SVG(ICONS.none)}</span><span>なし</span></button>${ANIM_CATS[cat].filter(animOk).map(n=>`<button class="at ${cur===n?'on':''}" data-anim="${esc(n)}" data-cat="${cat}"><span class="tile"><canvas data-amini="${esc(n)}"></canvas></span><span>${esc(animLabel(n))}</span></button>`).join('')}</div>
   <p class="hint">アオトアニメーション（Premiereのプリセット）のキーフレームを再現しています。イン・アウト・ループを1つずつ組み合わせられます。</p>`}
 function fontSub(s){return `<div class="fgrid">${FONTS.map(f=>`<button class="ft ${f.fam===s.font?'on':''}" data-font="${esc(f.fam)}" style="font-family:'${f.fam}'${f.fam==='Hiragino Sans'?",'Hiragino Kaku Gothic ProN'":''},'M PLUS 1p',sans-serif;font-weight:${f.w}">あア亜Aa<small>${esc(f.label)}${f.slot&&!loadedSlots.has(f.fam)?'・要追加':''}</small></button>`).join('')}${[...customFonts].filter(f=>!FONTS.some(x=>x.fam===f)).map(f=>`<button class="ft ${f===s.font?'on':''}" data-font="${esc(f)}" style="font-family:'${f}'">あア亜Aa<small>${esc(f)}</small></button>`).join('')}<button class="ft" data-act="addFont" style="font-size:14px">＋<small>フォントファイルを追加</small></button></div>`}
-function bulkInit(){const base=(S.captions[0]||{}).style||S.capStyle;S.ui.bulk={x:base.x??.5,y:base.y??.78,align:base.align||'center',size:Math.round(base.size||78),tpl:null,dirty:false}}
+function bulkInit(){const base=(S.captions[0]||{}).style||S.capStyle;S.ui.bulk={x:base.x??.5,y:base.y??.78,align:base.align||'center',va:base.va||'mid',size:Math.round(base.size||78),tpl:null,dirty:false}}
 function bulkSec(){if(!S.ui.bulk)bulkInit();const b=S.ui.bulk,cat=S.ui.tcat||'通常',cats=[...TPL_CATS,'マイ'],user=LS.get('kiri.tpl',[]);
   const list=cat==='マイ'?user:BUILTIN_TPL.filter(t=>t.cat===cat);
   return `<div class="sheet-h4">まとめて変更 <span class="badge">${S.captions.length}個の字幕</span></div>
    <div class="row"><label>揃え</label><span class="seg">${[['left','左揃え'],['center','中央揃え'],['right','右揃え']].map(([v,l])=>`<button data-act="bkalign" data-v="${v}" class="${b.align===v?'on':''}">${l}</button>`).join('')}</span></div>
+   <div class="row"><label>基準</label><span class="seg">${[['bot','下の行に合わせる'],['mid','中央に合わせる']].map(([v,l])=>`<button data-act="bkva" data-v="${v}" class="${b.va===v?'on':''}">${l}</button>`).join('')}</span></div>
    <div class="row"><label>縦の位置</label><span class="seg">${[[.16,'上'],[.5,'中央'],[.78,'下']].map(([v,l])=>`<button data-act="bkpos" data-v="${v}" class="${Math.abs(b.y-v)<.01?'on':''}">${l}</button>`).join('')}</span><button data-act="bkcenter">横を中央に</button></div>
    ${rng('横の位置','bulk.x',0,100,1,Math.round(b.x*100),'%')}${rng('縦の位置','bulk.y',0,100,1,Math.round(b.y*100),'%')}
    ${rng('文字サイズ','bulk.size',20,300,1,b.size)}
@@ -1888,6 +1891,8 @@ sheet.addEventListener('click',async e=>{
       req();autosave();syncPanelNums()},
     resetTf:()=>{pushUndo();for(const s of styleTargets()){s.scale=100;s.rot=0;s.op=100}req();renderPanel()},
     talign:()=>{pushUndo();applyStyle('align',v);renderPanel()},
+    va:()=>{pushUndo();applyStyle('va',v);renderPanel()},
+    bkva:()=>{S.ui.bulk.va=v;S.ui.bulk.dirty=true;renderPanel();req()},
     gmode:()=>{pushUndo();for(const s of styleTargets()){s.grad=s.grad||{stops:[s.fill||'#ffffff','#ffd23f'],ang:0};s.grad.on=v==='1';if(v==='1'&&s.grad.stops[0]==='#ffffff'&&s.fill&&s.fill!=='#ffffff')s.grad.stops[0]=s.fill}req();autosave();renderPanel()},
     gstop:()=>{S.ui.gstop=ix;renderPanel()},
     gadd:()=>{pushUndo();for(const s of styleTargets()){if(s.grad&&s.grad.stops.length<3)s.grad.stops.push(s.grad.stops[s.grad.stops.length-1])}S.ui.gstop=2;req();autosave();renderPanel()},
