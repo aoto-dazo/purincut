@@ -270,7 +270,7 @@ html.native #home,html.native #fs{padding-top:env(safe-area-inset-top,0px);paddi
     <button id="play" aria-label="再生"><svg class="ico" viewBox="0 0 24 24" id="playIco"><path d="M7 4v16l13-8z"/></svg></button>
     <button id="bFwd" aria-label="0.1秒進む">+0.1</button>
     <div class="sp"></div>
-    <button id="bSplit" aria-label="再生位置で分割"><svg class="ico" viewBox="0 0 24 24"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4 8.1 15.9M14.5 14.5 20 20M8.1 8.1 12 12"/></svg></button>
+    <button id="bSplit" aria-label="再生位置で分割（何も選んでいなければ全部）"><svg class="ico" viewBox="0 0 24 24"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4 8.1 15.9M14.5 14.5 20 20M8.1 8.1 12 12"/></svg></button>
     <button id="bUndo" aria-label="元に戻す"><svg class="ico" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg></button>
     <button id="bRedo" aria-label="やり直す"><svg class="ico" viewBox="0 0 24 24"><path d="m15 14 5-5-5-5"/><path d="M20 9H10a6 6 0 0 0 0 12h3"/></svg></button>
   </div>
@@ -445,7 +445,7 @@ function normImgStyle(s){s=Object.assign({x:.5,y:.4,scale:100,rot:0,op:100,strok
    字幕は元動画の時刻に紐づき（カットに追従）、テキスト/画像/効果音はタイムライン時刻（カット等の編集時は自動で追従させる）。 */
 const S={
   sources:[], segments:[], captions:[], overlays:[], sfx:[], chars:[],
-  fillerOn:true, fillerWords:'えーっと,えーと,えっと,えー,あのー,うーん,んー,あー',
+  fillerOn:false, silFiller:true, fillerWords:'えーっと,えーと,えっと,えー,あのー,うーん,んー,あー',
   layout:null, capStyle:clone(BASE_STYLE),
   audio:{orig:1,sfx:.9,bgm:.25,bgmFade:true},
   bgmClip:{t:0,len:null,offset:0},
@@ -513,7 +513,7 @@ function structural(fn){const A=captureAnchors();fn();recompute();restoreAnchors
 
 /* ================= 履歴・保存 ================= */
 const hist=[],fut=[];
-const snap=()=>JSON.stringify({sources:S.sources,segments:S.segments.map(g=>({id:g.id,src:g.src,s:g.s,e:g.e,gap:g.gap||0})),captions:S.captions,overlays:S.overlays.map(o=>Object.assign({},o,{img:undefined,_ac:undefined})),sfx:S.sfx,layout:S.layout,fillerOn:S.fillerOn,capStyle:S.capStyle,chars:S.chars,bgmClip:S.bgmClip});
+const snap=()=>JSON.stringify({sources:S.sources,segments:S.segments.map(g=>({id:g.id,src:g.src,s:g.s,e:g.e,gap:g.gap||0,adj:g.adj})),captions:S.captions,overlays:S.overlays.map(o=>Object.assign({},o,{img:undefined,_ac:undefined})),sfx:S.sfx,layout:S.layout,fillerOn:S.fillerOn,capStyle:S.capStyle,chars:S.chars,bgmClip:S.bgmClip});
 function pushUndo(){hist.push(snap());if(hist.length>60)hist.shift();fut.length=0;updUndo()}
 function restoreSnap(j){const o=JSON.parse(j);const imgs=Object.fromEntries(S.overlays.map(x=>[x.id,x.img]));Object.assign(S,o);S.overlays.forEach(x=>{x.img=imgs[x.id]||null;if(!x.img&&x.dataUrl)loadImg(x)});
   if(S.sel&&!selItem())S.sel=null;recompute();fitTl();renderPanel();renderTools()}
@@ -1047,7 +1047,7 @@ const ICONS={
   caplist:'<path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/>',check:'<path d="m5 12 5 5 9-10"/>',expand:'<path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/>',
   none:'<circle cx="12" cy="12" r="8"/><path d="M6.5 17.5l11-11"/>',
 };
-const MAIN_TOOLS=[['cut','カット'],['sil','無音カット'],['cap','字幕'],['text','テキスト'],['asset','素材'],['sfx','効果音'],['bgm','BGM'],['layout','縦配置'],['tpl','テンプレ']];
+const MAIN_TOOLS=[['split','分割'],['sil','無音カット'],['cap','字幕'],['text','テキスト'],['asset','素材'],['sfx','効果音'],['bgm','BGM'],['layout','縦配置'],['tpl','テンプレ']];
 let toolsKey=null;
 function renderTools(){const sel=S.sel,it=selItem();const key=sel&&it&&sel.kind!=='layer'?sel.kind+':'+sel.id+':'+(sel.kind==='seg'&&it.gap>0?1:0)+(sel.kind==='ov'?it.type:''):'main';if(key===toolsKey)return;toolsKey=key;
   const el=$('#tools');
@@ -1063,7 +1063,7 @@ function renderTools(){const sel=S.sel,it=selItem();const key=sel&&it&&sel.kind!
   }
   el.innerHTML=`<button class="back" data-cx="back" aria-label="選択をやめる">${SVG(ICONS.back)}</button><span class="lbl">${esc(label)}</span>`+acts.map(([a,l])=>`<button data-cx="${a}" class="${a==='del'?'danger':''}">${SVG(ICONS[a]||ICONS.edit)}${l}</button>`).join('')}
 $('#tools').addEventListener('click',e=>{const t=e.target.closest('[data-tool]');if(t){toolAction(t.dataset.tool);return}const c=e.target.closest('[data-cx]');if(c)clipAction(c.dataset.cx)});
-function toolAction(k){if(k==='text')return addText();if(k==='asset')return $('#fImg').click();openPanel(S.panel===k?null:k)}
+function toolAction(k){if(k==='split')return splitSel();if(k==='text')return addText();if(k==='asset')return $('#fImg').click();openPanel(S.panel===k?null:k)}
 function clipAction(a){const sel=S.sel,it=selItem();
   switch(a){
     case 'back':S.sel=null;req();break;
@@ -1194,7 +1194,7 @@ function drawTl(){
       tx.fillStyle=C('--accent');for(let i=1;i<eff.length;i++){const a=eff[i-1],b=eff[i];if(a.seg===b.seg){const x=X(b.t);if(x>HDR&&x<w)tx.fillRect(x-1,y,2,row.h)}}
       const shade=(ranges,col)=>{tx.fillStyle=col;for(const r of ranges)for(const [t0,t1] of srcRangeToTl(r.src,r.a,r.b))tx.fillRect(X(t0),y,Math.max(2,(t1-t0)*pps),row.h)};
       if(S.panel==='sil'&&silPreview)shade(silPreview,'rgba(255,77,109,.5)');
-      if(!S.fillerOn&&fillerRanges.length)shade(fillerRanges,'rgba(255,157,46,.4)');
+      if(!S.fillerOn&&fillerRanges.length&&(S.panel!=='sil'||S.silFiller))shade(fillerRanges,'rgba(255,157,46,.5)');
       continue}
     for(const c of clipsOf(row)){const sel=isSel(c),col=C(COLORS[c.kind]);let x0=X(c.t0),x1=Math.max(X(c.t1),x0+(c.minPx||3));if(x1<HDR||x0>w)continue;
       tx.fillStyle=sel?col:hexA(col,.42);rr(x0,y,Math.max(2,x1-x0-1),row.h,4);tx.fill();
@@ -1317,7 +1317,16 @@ document.addEventListener('pointerdown',e=>{if(!e.target.closest('#addMenu,#addB
 function splitAt(t){const g=segAtTl(t),sa=srcAt(t);if(!g||!sa){toast('映像のある位置で分割してください');return}
   const x=sa.x;if(x-g.s<.05||g.e-x<.05){toast('区間の端すぎて分割できません');return}
   pushUndo();const i=S.segments.indexOf(g);const n={id:uid('g'),src:g.src,s:x,e:g.e,gap:0};if(g.adj)n.adj=clone(g.adj);g.e=x;S.segments.splice(i+1,0,n);S.sel={kind:'seg',id:n.id};recompute();renderPanel();toast('分割しました')}
-function splitSel(){const sel=S.sel,it=selItem();if(!sel||!it||sel.kind==='seg'||sel.kind==='gap'||sel.kind==='sfx'||sel.kind==='bgm'||sel.kind==='layer')return splitAt(S.tl);
+// 何も選んでいないときは、再生位置にあるクリップ（映像・字幕・テキスト・画像）をまとめて分割
+function splitAll(t){const parts=[];pushUndo();
+  const g=segAtTl(t),sa=srcAt(t);if(g&&sa&&sa.x-g.s>=.05&&g.e-sa.x>=.05){const i=S.segments.indexOf(g);const n={id:uid('g'),src:g.src,s:sa.x,e:g.e,gap:0};if(g.adj)n.adj=clone(g.adj);g.e=sa.x;S.segments.splice(i+1,0,n);parts.push('映像')}
+  for(const it of S.captions.slice()){const a=srcAt(t);if(!a||a.src!==it.src||a.x<=it.s+.05||a.x>=it.e-.05)continue;const s=a.x,chars=[...it.text.replace(/\n/g,'')],k=clamp(Math.round(chars.length*(s-it.s)/(it.e-it.s)),1,Math.max(1,chars.length-1));
+    const n=Object.assign(clone(it),{id:uid('c'),s,text:chars.slice(k).join('')});it.text=chars.slice(0,k).join('');it.e=s;S.captions.splice(S.captions.indexOf(it)+1,0,n);if(!parts.includes('字幕'))parts.push('字幕')}
+  for(const it of S.overlays.slice()){if(t<=it.t+.05||t>=it.t+it.d-.05)continue;const n=Object.assign(clone(Object.assign({},it,{img:undefined,_ac:undefined})),{id:uid('o'),t,d:it.t+it.d-t});n.img=it.img;it.d=t-it.t;S.overlays.push(n);
+    const l=it.type==='img'?'画像':'テキスト';if(!parts.includes(l))parts.push(l)}
+  if(!parts.length){hist.pop();toast('再生位置に分割できるものがありません');return}
+  S.sel=null;recompute();fitTl();autosave();renderPanel();toast(parts.join('・')+'を分割しました')}
+function splitSel(){const sel=S.sel,it=selItem();if(!sel||!it||sel.kind==='layer')return splitAll(S.tl);if(sel.kind==='seg'||sel.kind==='gap'||sel.kind==='sfx'||sel.kind==='bgm')return splitAt(S.tl);
   if(sel.kind==='cap'){const sa=srcAt(S.tl);if(!sa||sa.src!==it.src||sa.x<=it.s+.05||sa.x>=it.e-.05){toast('再生ヘッドを字幕の上に合わせてください');return}
     pushUndo();const s=sa.x,chars=[...it.text.replace(/\n/g,'')],k=clamp(Math.round(chars.length*(s-it.s)/(it.e-it.s)),1,Math.max(1,chars.length-1));
     const n=Object.assign(clone(it),{id:uid('c'),s,text:chars.slice(k).join('')});it.text=chars.slice(0,k).join('');it.e=s;S.captions.splice(S.captions.indexOf(it)+1,0,n);S.sel={kind:'cap',id:n.id}}
@@ -1346,8 +1355,9 @@ function detectSilence(){const out=[];const{thr,min,keep}=S.sil,th=Math.pow(10,t
   for(const src of new Set(S.segments.map(g=>g.src))){const rms=SRC[src]&&SRC[src].rms;if(!rms)continue;const n=rms.length;let st=-1;
     for(let i=0;i<=n;i++){const sil=i<n&&rms[i]<th;if(sil&&st<0)st=i;if(!sil&&st>=0){if((i-st)/100>=min){const a=st/100+(st===0?0:keep),b=i/100-(i>=n?0:keep);if(b-a>.04)out.push({src,a,b})}st=-1}}}
   return out}
-function applySilence(){const c=silPreview||[];if(!c.length)return;pushUndo();const before=tlDur;
+function applySilence(){const c=silPreview||[];if(!c.length&&!(S.silFiller&&!S.fillerOn&&fillerRanges.length))return;pushUndo();const before=tlDur;
   structural(()=>{const ns=[];for(const g of S.segments){const cuts=c.filter(r=>r.src===g.src).map(r=>[r.a,r.b]);const parts=subtract([{s:g.s,e:g.e}],cuts);if(!parts.length){continue}parts.forEach((p,i)=>ns.push({id:i?uid('g'):g.id,src:g.src,s:p.s,e:p.e,gap:i?0:g.gap}))}if(ns.length)S.segments=ns});
+  if(S.silFiller&&!S.fillerOn&&fillerRanges.length)structural(()=>{S.fillerOn=true});
   S.sel=null;silPreview=detectSilence();renderPanel();toast(`${(before-tlDur).toFixed(1)}秒カットしました`)}
 function addText(){pushUndo();const t=S.tl,d=2.5;const o={id:uid('o'),type:'text',t,d,track:freeTrack(t,t+d),text:'テキスト',style:normStyle(Object.assign(clone(BASE_STYLE),{y:.42,size:96}))};
   S.overlays.push(o);S.sel={kind:'ov',id:o.id};S.ui.tab='tpl';fitTl();openPanel('edit');setTimeout(()=>{const x=$('#teText');if(x){x.focus();x.select()}},80)}
@@ -1574,14 +1584,17 @@ function renderPanel(fresh){const k=S.panel;if(!k)return;const keep=!fresh&&shee
       <label>終了</label><button data-act="trim" data-e="e" data-d="-0.1">−0.1</button><button data-act="trim" data-e="e" data-d="0.1">+0.1</button></div>`
       :`<p class="hint">V1/A1をタップで区間を選択、ダブルタップで分割。選んだ区間の端の白いつまみで長さ調整、長押しでつかんで右へずらすと空白を作れます。</p>`)+
     `<div class="row"><button class="pri" data-act="split">再生位置で分割</button><button data-act="closeall">空白をすべて詰める</button><button data-act="resetcut">カットを全部戻す</button></div>
-     <div class="sheet-h4">フィラーカット</div>
-     <label class="field"><span>えーと等</span><input type="checkbox" data-f="fillerOn" ${S.fillerOn?'checked':''}><span class="badge">${fillerRanges.length}か所・${fillerRanges.reduce((a,f)=>a+f.b-f.a,0).toFixed(1)}秒</span></label>
-     <label class="field"><span>対象の言葉</span><input type="text" data-f="fillerWords" value="${esc(S.fillerWords)}"><span></span></label>`}
+`}
   if(k==='sil'){const cuts=silPreview||[],tot=cuts.reduce((a,r)=>a+r.b-r.a,0);
     h=shTop('無音カット')+(Object.values(SRC).some(r=>r.rms)?'':`<p class="hint">音声の解析が終わると使えます。</p>`)+
     rng('無音の判定','sil.thr',-70,-15,1,S.sil.thr,'dB')+rng('最短の無音','sil.min',.15,2,.05,S.sil.min,'秒')+rng('前後に残す','sil.keep',0,.6,.01,S.sil.keep,'秒')+
-    `<div class="row"><span class="badge" id="silInfo">${cuts.length}か所・${tot.toFixed(1)}秒をカット</span><div style="flex:1"></div><button class="pri" data-act="silapply" ${cuts.length?'':'disabled'}>無音をカット</button></div>
-    <p class="hint">赤い部分がカットされます。「前後に残す」を増やすと言葉の頭やお尻が切れにくくなります。</p>`}
+    `<div class="sheet-h4">フィラー（えーと・あのー等）</div>
+     <label class="field"><span>一緒にカット</span><input type="checkbox" data-f="silFiller" ${S.silFiller?'checked':''}><span class="badge">${S.fillerOn?'カット済み':(S.chars.length?`${fillerRanges.length}か所・${fillerRanges.reduce((a,f)=>a+f.b-f.a,0).toFixed(1)}秒`:'文字起こし前')}</span></label>
+     <label class="field"><span>対象の言葉</span><input type="text" data-f="fillerWords" value="${esc(S.fillerWords)}"><span></span></label>
+     ${S.chars.length?'':`<div class="row"><button data-act="asr">文字起こししてフィラーを探す</button></div><p class="hint" id="asrInfo">フィラーを見つけるには先に文字起こしが必要です。</p>`}
+     ${S.fillerOn?'<div class="row"><button data-act="fillerundo">フィラーのカットを戻す</button></div>':''}
+     <div class="row"><span class="badge" id="silInfo">無音 ${cuts.length}か所・${tot.toFixed(1)}秒</span><div style="flex:1"></div><button class="pri" data-act="silapply" ${(cuts.length||(S.silFiller&&!S.fillerOn&&fillerRanges.length))?'':'disabled'}>${S.silFiller?'無音＋フィラーをカット':'無音をカット'}</button></div>
+    <p class="hint">赤い部分が無音、オレンジの部分がフィラーです。「前後に残す」を増やすと言葉の頭やお尻が切れにくくなります。</p>`}
   if(k==='cap'){const c=S.sel&&S.sel.kind==='cap'?selItem():null;const list=S.captions.slice().sort((a,b)=>capTl(a)-capTl(b));
     h=shTop('字幕',`<span class="badge">${S.captions.length}個</span>`)+
     `<div class="row"><button class="pri" data-act="asr">自動文字起こし</button><button data-act="srt">SRT/VTTを読込</button><button data-act="addcap">再生位置に追加</button><button data-act="bulkstyle">全体のスタイル</button></div>
@@ -1667,6 +1680,7 @@ sheet.addEventListener('input',e=>{const el=e.target;
   if(f.startsWith('audio.')){S.audio[f.slice(6)]=val;applyVol();autosave();return}
   if(f==='bgm.offset'){S.bgmClip.offset=val;return}
   if(f==='fillerOn'){pushUndo();structural(()=>{S.fillerOn=val});renderPanel();return}
+  if(f==='silFiller'){S.silFiller=val;renderPanel();req();return}
   if(f==='fillerWords'){structural(()=>{S.fillerWords=val});return}
   if(f==='sx.vol'){const x=selItem();if(x)x.vol=val;return}
   if(f.startsWith('lay.')){S.layout[f.slice(4)]=val;req();autosave();return}
@@ -1709,6 +1723,7 @@ sheet.addEventListener('click',async e=>{
     closeall:()=>{pushUndo();structural(()=>S.segments.forEach(g=>g.gap=0));fitTl();toast('空白をすべて詰めました')},
     resetcut:()=>{pushUndo();structural(()=>{const seen=[];for(const g of S.segments)if(!seen.includes(g.src))seen.push(g.src);S.segments=seen.map((src,i)=>{const m=srcMeta(src);return{id:uid('g'),src,s:0,e:m&&m.kind==='image'?3:(m?.dur||1),gap:0}})});S.sel=null;renderPanel();toast('カットを元に戻しました')},
     silapply:applySilence,
+    fillerundo:()=>{pushUndo();structural(()=>{S.fillerOn=false});renderPanel();toast('フィラーのカットを戻しました')},
     asr:transcribe, srt:()=>$('#fSrt').click(),
     addcap:()=>{let sa=srcAt(S.tl);if(!sa){const nx=eff.find(p=>p.t>S.tl);if(nx)sa={src:nx.src,x:nx.s}}if(!sa){toast('映像のある位置に合わせてください');return}
       pushUndo();const c={id:uid('c'),src:sa.src,s:sa.x,e:sa.x+2,text:'テキスト',style:clone(S.capStyle)};S.captions.push(c);S.captions.sort((a,b)=>a.s-b.s);S.sel={kind:'cap',id:c.id};S.ui.applyAll=false;S.ui.tab='tpl';recompute();openPanel('edit');setTimeout(()=>{const t=$('#teText');t&&t.focus();t&&t.select()},80)},
