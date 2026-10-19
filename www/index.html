@@ -1909,7 +1909,7 @@ $('#fAddImg').addEventListener('change',async e=>{const f=e.target.files[0];e.ta
 async function addNativeVideo(){pause();ensureAudio();let info;try{info=await pickNativeVideo()}catch(e){toast('動画を読み込めませんでした（'+(e&&e.message||e)+'）',3500);return}if(!info)return;
   status('動画を読み込み中…');let meta;try{meta=await makeVideoSourceNative(info)}catch(err){status('');toast('この動画形式は読み込めませんでした');return}
   pushUndo();S.sources.push(meta);insertSeg({id:uid('g'),src:meta.id,s:0,e:meta.dur,gap:0});status('');toast('動画をV1に追加しました');analyzeSource(meta.id);runVoiceFX()}
-$('#fAddVid').addEventListener('change',async e=>{const f=e.target.files[0];e.target.value='';if(!f)return;pause();status('動画を読み込み中…');ensureAudio();let meta;try{meta=await makeVideoSource(f)}catch(err){status('');toast('この動画形式は読み込めませんでした');return}
+$('#fAddVid').addEventListener('change',async e=>{let f=e.target.files[0];e.target.value='';if(!f)return;pause();status('動画を読み込み中…');ensureAudio();let meta;try{if(NATIVE)f=await natVideoFromFile(f);meta=await makeAnySource(f)}catch(err){status('');toast('この動画形式は読み込めませんでした');return}
   pushUndo();S.sources.push(meta);insertSeg({id:uid('g'),src:meta.id,s:0,e:meta.dur,gap:0});status('');toast('動画をV1に追加しました');analyzeSource(meta.id)});
 $('#fSrt').addEventListener('change',async e=>{const f=e.target.files[0];e.target.value='';if(!f)return;const list=parseSrt(await f.text());if(!list.length){toast('字幕が見つかりませんでした');return}
   const src=srcAt(S.tl)?.src||S.segments[0]?.src;pushUndo();S.chars=S.chars.filter(c=>c.src!==src).concat(charsFromSegments(list,src));S.captions=S.captions.filter(c=>c.src!==src).concat(list.map(x=>({id:uid('c'),src,s:x.s,e:x.e,text:x.text,style:clone(S.capStyle)})));recompute();renderPanel();toast(`${list.length}個の字幕を読み込みました`)});
@@ -1923,10 +1923,20 @@ function clearSources(keep){for(const id in SRC){if(id===keep||id==='demo')conti
 function makeThumb(){try{const c=document.createElement('canvas');if(LW>LH){c.width=240;c.height=135}else{c.width=120;c.height=213}drawFrame(c.getContext('2d'),c.width,c.height,clamp(S.tl,0,tlDur),false);req();return c.toDataURL('image/jpeg',.6)}catch(e){return ''}}
 let saving=false,saveAgain=false;
 // iPhoneのアプリ内ブラウザはファイル(Blob)をそのまま保存・再生できないことがあるため、8MBずつのデータに分けて保存する
-async function storeFile(key,f,name,show){const CH=8<<20,n=Math.ceil(f.size/CH);
+// アプリ版：ファイルはアプリ内の保存場所へ（Webの保存領域は容量が小さいため）
+async function natImportFile(f,name,say){const {id}=await nat('beginFile',{name:'imp_'+Date.now()});const CH=3<<20;
+  for(let o=0;o<f.size;o+=CH){const u=new Uint8Array(await f.slice(o,Math.min(f.size,o+CH)).arrayBuffer());let s='';for(let i=0;i<u.length;i+=32768)s+=String.fromCharCode.apply(null,u.subarray(i,i+32768));
+    await nat('appendFile',{id,data:btoa(s)});say&&say(Math.min(1,(o+CH)/f.size))}
+  return nat('commitFile',{id,name})}
+async function natVideoFromFile(f){const ext=((f.name||'').match(/\.[a-z0-9]+$/i)||['.mov'])[0];const name='v'+Date.now().toString(36)+ext;
+  const r=await natImportFile(f,name,p=>status(`動画を取り込み中… ${Math.round(p*100)}%`));return{__nat:true,name,url:r.url,size:r.size,displayName:f.name||name}}
+async function storeFile(key,f,name,show){
+  if(NATIVE){const ext=((name||f.name||'').match(/\.[a-z0-9]+$/i)||[''])[0];const nm='f_'+key.replace(/[^a-z0-9]/gi,'_')+ext;await natImportFile(f,nm,show?p=>status(`保存中… ${Math.round(p*100)}%`):null);status('');
+    await IDB.put(key,{natRef:nm,type:f.type||'',name:name||f.name||''});return}const CH=8<<20,n=Math.ceil(f.size/CH);
   for(let i=0;i<n;i++){if(show)status(`保存中… ${Math.round(i/n*100)}%`);await IDB.put(key+'#'+i,await f.slice(i*CH,Math.min(f.size,(i+1)*CH)).arrayBuffer())}
   await IDB.put(key,{chunks:n,size:f.size,type:f.type||vidType(name),name:name||f.name||'video.mp4'});status('')}
-async function loadFile(key,name){const v=await IDB.get(key);if(!v)return null;if(v instanceof Blob)return v.type?v:new File([v],name||'video.mp4',{type:vidType(name)});
+async function loadFile(key,name){const v=await IDB.get(key);if(!v)return null;
+  if(v.natRef){const r=await nat('resolveMedia',{name:v.natRef});const b=await (await fetch(r.url)).blob();return new File([b],v.name||name||'file',{type:v.type||b.type})}if(v instanceof Blob)return v.type?v:new File([v],name||'video.mp4',{type:vidType(name)});
   if(v.chunks!=null){const parts=[];for(let i=0;i<v.chunks;i++){const c=await IDB.get(key+'#'+i);if(!c)throw new Error('保存データの一部が見つかりません');parts.push(c)}return new File(parts,v.name||name||'video.mp4',{type:v.type||vidType(name)})}
   if(v.data)return new File([v.data],name||'video.mp4',{type:v.type||vidType(name)});return null}
 async function saveProject(manual){if(!PJ.id){if(manual)toast('デモは保存できません。ホームの「新規作成」から始めてください');return false}
@@ -1937,7 +1947,7 @@ async function saveProject(manual){if(!PJ.id){if(manual)toast('デモは保存�
     await IDB.put('pj:'+PJ.id,data);
     const list=(await IDB.get('pjlist'))||[];const row={id:PJ.id,name:PJ.name,aspect:PJ.aspect,updated:data.updated,dur:tlDur,thumb:makeThumb()};const i=list.findIndex(x=>x.id===PJ.id);if(i>=0)list.splice(i,1);list.unshift(row);await IDB.put('pjlist',list);
     if(manual)toast('保存しました');return true}
-  catch(e){console.warn(e);toast('保存できませんでした（端末の空き容量が足りない可能性があります）',3500);return false}
+  catch(e){console.warn(e);toast('保存できませんでした（'+((e&&(e.message||e.name))||e)+'）',5000);return false}
   finally{saving=false;if(saveAgain){saveAgain=false;setTimeout(()=>saveProject(false),300)}}}
 async function openProject(f,aspect){pause();status('動画を読み込み中…');ensureAudio();let meta;try{meta=await makeAnySource(f)}catch(err){status('');toast('この動画は読み込めませんでした（'+(err&&err.message||err)+'）',6000);return}
   clearSources(meta.id);setAspect(aspect||'v');
@@ -1961,7 +1971,7 @@ async function openSavedInner(id){status('プロジェクトを開いていま�
   Object.assign(S,d.snap);S.split=d.split||S.split;S.audio=Object.assign(S.audio,d.audio||{});S.fillerWords=d.fillerWords||S.fillerWords;S.bgmClip=S.bgmClip||{t:0,len:null,offset:0};S.exportRes=d.exportRes||720;
   S.capStyle=normStyle(S.capStyle);S.captions.forEach(c=>c.style=normStyle(c.style));S.overlays.forEach(o=>{o.style=o.type==='img'?normImgStyle(o.style):normStyle(o.style);o.img=null;o._ac=null;if(o.type==='img'&&o.dataUrl)loadImg(o)});
   S.sel=null;S.tl=0;S.tlY=0;hist.length=0;fut.length=0;applyVol();
-  bgm=null;if(d.hasBgm){const f=await loadFile('pjb:'+id,d.bgmName);if(f){try{const buf=await actx.decodeAudioData(await f.arrayBuffer());bgm={name:d.bgmName||'BGM',buf,file:f,saved:true}}catch(e){}}}
+  bgm=null;if(d.hasBgm){const f=await loadFile('pjb:'+id,d.bgmName).catch(e=>{console.warn(e);return null});if(f){try{const buf=await actx.decodeAudioData(await f.arrayBuffer());bgm={name:d.bgmName||'BGM',buf,file:f,saved:true}}catch(e){}}}
   PJ.id=id;PJ.name=d.name;savedFiles=new Set((d.snap.sources||[]).filter(m=>m.kind==='video'&&SRC[m.id]).map(m=>m.id));
   $('#srcName').textContent=PJ.name;recompute();hideHome();ensureV1Visible();updUndo();renderPanel();renderTools();seekPreview();status('');
   if(missing)toast(`${missing}本の動画が見つかりませんでした`,3000);
@@ -1988,7 +1998,7 @@ $('#home').addEventListener('change',async e=>{const el=e.target;if(!el.dataset.
   const list=(await IDB.get('pjlist'))||[];const r=list.find(x=>x.id===id);if(r){r.name=name;await IDB.set('pjlist',list)}const d=await IDB.get('pj:'+id);if(d){d.name=name;await IDB.set('pj:'+id,d)}if(PJ.id===id){PJ.name=name;$('#srcName').textContent=name}});
 $('#bHome').addEventListener('click',()=>showHome());
 $('#bSave').addEventListener('click',()=>saveProject(true));
-$('#fVideo').addEventListener('change',async e=>{const f=e.target.files[0];e.target.value='';if(!f)return;await openProject(f,PJ.pending||'v')});
+$('#fVideo').addEventListener('change',async e=>{let f=e.target.files[0];e.target.value='';if(!f)return;if(NATIVE){try{f=await natVideoFromFile(f)}catch(err){status('');toast('動画を取り込めませんでした（'+(err&&err.message||err)+'）',5000);return}}await openProject(f,PJ.pending||'v')});
 
 /* ================= 書き出し（再生エンジンで録画） ================= */
 let exporting=null,lastExport=null;

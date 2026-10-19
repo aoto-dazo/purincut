@@ -90,12 +90,14 @@ public class PurinNativePlugin: CAPPlugin, CAPBridgedPlugin, PHPickerViewControl
         CAPPluginMethod(name: "exportCancel", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "clearTemp", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "audioFX", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "audioFXStatus", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "audioFXStatus", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "commitFile", returnType: CAPPluginReturnPromise)
     ]
     var fxProgress: [String: Double] = [:]
     let purinPlayer = PurinPlayer()
     let purinExporter = PurinExporter()
     func tmpFileURL(_ name: String) -> URL { tmpDir().appendingPathComponent((name as NSString).lastPathComponent) }
+    func mediaFileURL(_ name: String) -> URL { mediaURL(name) }
     func closeWriting(_ id: String) { if let fh = writing[id] { try? fh.close(); writing[id] = nil } }
 
     private var pickCall: CAPPluginCall?
@@ -954,5 +956,24 @@ extension PurinNativePlugin {
     }
     @objc func audioFXStatus(_ call: CAPPluginCall) {
         call.resolve(["progress": fxProgress[call.getString("out") ?? ""] ?? 0])
+    }
+}
+
+
+extension PurinNativePlugin {
+    /// 受け取ったファイルを動画・音声の保存場所（アプリ内）へ移す
+    @objc func commitFile(_ call: CAPPluginCall) {
+        guard let id = call.getString("id"), let name = call.getString("name") else { call.reject("引数がありません"); return }
+        closeWriting(id)
+        let src = tmpFileURL(id)
+        let dst = mediaFileURL(name)
+        do {
+            try? FileManager.default.removeItem(at: dst)
+            try FileManager.default.moveItem(at: src, to: dst)
+            let size = (try? FileManager.default.attributesOfItem(atPath: dst.path)[.size] as? NSNumber)?.doubleValue ?? 0
+            call.resolve(["url": bridge?.portablePath(fromLocalURL: dst)?.absoluteString ?? dst.absoluteString, "size": size, "name": name])
+        } catch {
+            call.reject("保存できませんでした: \(error.localizedDescription)")
+        }
     }
 }
