@@ -1,0 +1,6 @@
+{
+  "appId": "com.aotodazo.purincut",
+  "appName": "ぷりんCut",
+  "webDir": "www",
+  "ios": { "contentInset": "never", "allowsLinkPreview": false, "scrollEnabled": false }
+}

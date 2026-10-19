@@ -1,0 +1,14 @@
+{
+  "name": "purincut",
+  "version": "1.0.0",
+  "private": true,
+  "description": "ぷりんCut - 切り抜き動画編集アプリ",
+  "scripts": {},
+  "dependencies": {
+    "@capacitor/core": "8.5.2",
+    "@capacitor/ios": "8.5.2"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.5.2"
+  }
+}

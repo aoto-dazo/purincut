@@ -1,0 +1,57 @@
+name: iOSアプリをビルド
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: 依存パッケージを入れる
+        run: npm ci
+
+      - name: Web部分をiOSプロジェクトにコピー
+        run: npx cap sync ios
+
+      - name: Xcodeでビルド（署名なし）
+        run: |
+          set -o pipefail
+          xcodebuild -version
+          cd ios/App
+          xcodebuild -project App.xcodeproj -scheme App -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build 2>&1 | tee build.log | grep -E "error:|warning: unable|BUILD (SUCCEEDED|FAILED)" || true
+          test -d build/Build/Products/Release-iphoneos/App.app || (tail -200 build.log; exit 1)
+
+      - name: ipaファイルにまとめる
+        run: |
+          mkdir -p out/Payload
+          cp -R ios/App/build/Build/Products/Release-iphoneos/App.app out/Payload/
+          cd out && zip -qry ../purincut.ipa Payload
+          ls -la ../purincut.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: purincut-ipa
+          path: purincut.ipa
+
+      - name: ダウンロード用に公開（Releases）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "build-${{ github.run_number }}" purincut.ipa \
+            --title "ぷりんCut ビルド ${{ github.run_number }}" \
+            --notes "Sideloadly で iPhone に入れる用の ipa ファイルです（署名なし）。" \
+            --latest
