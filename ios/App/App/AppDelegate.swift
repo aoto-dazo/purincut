@@ -62,6 +62,7 @@ public class PurinNativePlugin: CAPPlugin, CAPBridgedPlugin, PHPickerViewControl
     public let identifier = "PurinNativePlugin"
     public let jsName = "PurinNative"
     public let pluginMethods: [CAPPluginMethod] = [
+        CAPPluginMethod(name: "ping", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "pickVideo", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "resolveMedia", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "deleteMedia", returnType: CAPPluginReturnPromise),
@@ -120,6 +121,10 @@ public class PurinNativePlugin: CAPPlugin, CAPBridgedPlugin, PHPickerViewControl
         }
     }
 
+    @objc func ping(_ call: CAPPluginCall) {
+        call.resolve(["ok": true, "version": 2])
+    }
+
     // MARK: 動画を選ぶ（写真アプリから無圧縮で取り込む）
     @objc func pickVideo(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
@@ -130,7 +135,9 @@ public class PurinNativePlugin: CAPPlugin, CAPBridgedPlugin, PHPickerViewControl
             let picker = PHPickerViewController(configuration: config)
             picker.delegate = self
             self.pickCall = call
-            self.bridge?.viewController?.present(picker, animated: true)
+            guard var top = self.bridge?.viewController else { call.reject("画面を開けませんでした"); return }
+            while let p = top.presentedViewController { top = p }
+            top.present(picker, animated: true)
         }
     }
 

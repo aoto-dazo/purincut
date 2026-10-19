@@ -294,7 +294,9 @@ html.native #home,html.native #fs{padding-top:env(safe-area-inset-top,0px);paddi
   <div id="hAspect" hidden><div class="sheet-h4">画面サイズを選ぶ</div><div class="asp">
     <button data-asp="v"><i class="av"></i><b>縦 9:16</b><small>1080×1920・ショート/TikTok</small></button>
     <button data-asp="h"><i class="ah"></i><b>横 16:9</b><small>1920×1080・YouTube</small></button></div>
-    <p class="hint">選ぶと、使う動画を選ぶ画面が開きます。</p></div>
+    <p class="hint">選ぶと、使う動画を選ぶ画面が開きます。</p>
+    <div id="hNatErr" class="hint" hidden style="color:var(--danger-fg)"></div>
+    <div class="row" id="hFileRow" hidden><button id="hFile">別の方法で動画を選ぶ（ファイル）</button></div></div>
   <div class="sheet-h4">保存したプロジェクト</div>
   <div id="hList"></div>
 </div></div>
@@ -1849,8 +1851,12 @@ async function showHome(){if(PJ.id)await saveProject(false);pause();if(fsOn)clos
 function hideHome(){$('#home').hidden=true;layout()}
 let delArm={id:null,t:0};
 $('#home').addEventListener('click',e=>{const t=e.target;
+  if(t.closest('#hFile')){$('#fVideo').click();return}
   if(t.closest('#hNew')){$('#hAspect').hidden=!$('#hAspect').hidden;return}
-  const a=t.closest('[data-asp]');if(a){PJ.pending=a.dataset.asp;ensureAudio();if(NATIVE){status('写真を選んでください…');pickNativeVideo().then(info=>{status('');if(info)openProject(info,PJ.pending||'v')}).catch(e=>{status('');toast('動画を選べませんでした（'+(e&&e.message||e)+'）',6000)})}else $('#fVideo').click();return}
+  const a=t.closest('[data-asp]');if(a){PJ.pending=a.dataset.asp;ensureAudio();if(NATIVE){$('#hFileRow').hidden=false;const err=m=>{const x=$('#hNatErr');x.hidden=false;x.textContent=m};(async()=>{
+      try{await withTimeout(nat('ping'),2500)}catch(e){err('iPhoneの機能に接続できませんでした。下の「別の方法で動画を選ぶ」から選んでください。');return}
+      const x=$('#hNatErr');x.hidden=false;x.style.color='var(--mute)';x.textContent='写真の画面で動画を選んでください。選んだあと、動画の準備に少し時間がかかります…';
+      try{const info=await pickNativeVideo();x.hidden=true;x.style.color='';if(info)openProject(info,PJ.pending||'v')}catch(e){err('動画を選べませんでした（'+(e&&e.message||e)+'）。下の「別の方法で動画を選ぶ」も試せます。')}})()}else $('#fVideo').click();return}
   if(t.closest('#hDemo')){PJ.id=null;setAspect('v');setupDemo();hideHome();return}
   const o=t.closest('[data-open]');if(o){openSaved(o.dataset.open);return}
   const d=t.closest('[data-del]');if(d){const id=d.dataset.del;if(delArm.id===id&&Date.now()-delArm.t<3000){deleteProject(id);delArm.id=null}else{delArm={id,t:Date.now()};d.textContent='もう一度で削除'}return}});
