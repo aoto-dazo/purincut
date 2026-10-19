@@ -1051,7 +1051,7 @@ class Cursor{
     try{this.dec.configure(this.fs.cfg)}catch(e){this.broken=true}
     const S=this.fs.samples;let k=0;for(let i=0;i<S.length;i++){if(S[i].k&&S[i].t<=x+1e-3)k=i;else if(S[i].k&&S[i].t>x+1e-3&&i>k)break}
     this.next=k;this.seekT=x;this.pos=x;this.fedT=-1}
-  covers(x){return this.dec&&!this.broken&&x>=this.seekT-1e-3&&x>=this.pos-.12&&x<=this.pos+2.2&&(this.ready(x)||this.fedT<0||x-this.fedT<.3)}
+  covers(x){return this.dec&&!this.broken&&x>=this.seekT-1e-3&&x>=this.pos-.12&&x<=this.pos+1.2&&(this.ready(x)||this.fedT<0||x-this.fedT<.3)}
   ready(x){const lo=x-Math.max(.1,this.fs.fd*3),hi=x+this.fs.fd*.5;return this.q.some(f=>{const t=f.timestamp/1e6;return t>=lo&&t<=hi})}
   trim(){const x=this.pos,h=this.fs.fd*.5;let last=-1;for(let i=0;i<this.q.length;i++)if(this.q[i].timestamp/1e6<=x+h)last=i;
     if(last>0){for(let i=0;i<last;i++)try{this.q[i].close()}catch(e){}this.q.splice(0,last)}
@@ -1082,7 +1082,7 @@ function wcSchedule(t){const until=t+2;if(PB.schedUntil>=until)return;const from
 function wcTick(){const t=wcNow();if(t>=tlDur-1e-3){fireSfx(lastTl,tlDur);lastTl=tlDur;S.tl=tlDur;finishPlay();return}
   wcSchedule(t);
   // 次のカット点の先を裏でデコードしておく
-  const p=pieceAt(t);if(p){const i=eff.indexOf(p),nx=eff[i+1];if(nx&&nx.t-t<2){const r=SRC[nx.src];const contig=nx.src===p.src&&Math.abs(nx.s-p.e)<.05;if(r&&r.fs&&!contig)r.fs.prefetch(nx.s)}}
+  const p=pieceAt(t);if(p){const i=eff.indexOf(p),nx=eff[i+1];if(nx&&nx.t-t<1.2){const r=SRC[nx.src];const contig=nx.src===p.src&&Math.abs(nx.s-p.e)<.05;if(r&&r.fs&&!contig)r.fs.prefetch(nx.s)}}
   fireSfx(lastTl,t);lastTl=t;S.tl=t;dirty=true}
 
 // カット点の先を「音を消して少し前から再生」しておき、つなぎ目で表示と音を切り替える（止まらない）
