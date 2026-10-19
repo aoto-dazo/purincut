@@ -1047,16 +1047,17 @@ class Cursor{
   constructor(fs){this.fs=fs;this.q=[];this.dec=null;this.next=0;this.seekT=-1;this.pos=-1;this.gen=0;this.feeding=false;this.fedT=-1}
   kill(){this.gen++;for(const f of this.q)try{f.close()}catch(e){}this.q=[];if(this.dec){try{this.dec.close()}catch(e){}this.dec=null}}
   seek(x){this.kill();const g=this.gen;
-    this.dec=new VideoDecoder({output:f=>{if(g!==this.gen){f.close();return}this.q.push(f);if(this.q.length>1&&this.q[this.q.length-2].timestamp>f.timestamp)this.q.sort((a,b)=>a.timestamp-b.timestamp);this.trim();req()},error:e=>{console.warn('decode',e);if(g===this.gen){this.broken=true}}});
+    this.dec=new VideoDecoder({output:f=>{if(g!==this.gen||f.timestamp/1e6<this.seekT-this.fs.fd*.6){f.close();return}this.q.push(f);if(this.q.length>1&&this.q[this.q.length-2].timestamp>f.timestamp)this.q.sort((a,b)=>a.timestamp-b.timestamp);this.trim();req()},error:e=>{console.warn('decode',e);if(g===this.gen){this.broken=true}}});
     try{this.dec.configure(this.fs.cfg)}catch(e){this.broken=true}
     const S=this.fs.samples;let k=0;for(let i=0;i<S.length;i++){if(S[i].k&&S[i].t<=x+1e-3)k=i;else if(S[i].k&&S[i].t>x+1e-3&&i>k)break}
     this.next=k;this.seekT=x;this.pos=x;this.fedT=-1}
-  covers(x){return this.dec&&!this.broken&&x>=this.seekT-1e-3&&x>=this.pos-.12&&x<=this.pos+1.2}
-  ready(x){return this.q.some(f=>f.timestamp/1e6<=x+this.fs.fd*.5)}
+  covers(x){return this.dec&&!this.broken&&x>=this.seekT-1e-3&&x>=this.pos-.12&&x<=this.pos+2.2&&(this.ready(x)||this.fedT<0||x-this.fedT<.3)}
+  ready(x){const lo=x-Math.max(.1,this.fs.fd*3),hi=x+this.fs.fd*.5;return this.q.some(f=>{const t=f.timestamp/1e6;return t>=lo&&t<=hi})}
   trim(){const x=this.pos,h=this.fs.fd*.5;let last=-1;for(let i=0;i<this.q.length;i++)if(this.q[i].timestamp/1e6<=x+h)last=i;
     if(last>0){for(let i=0;i<last;i++)try{this.q[i].close()}catch(e){}this.q.splice(0,last)}
     while(this.q.length>12){try{this.q.pop().close()}catch(e){}}}
-  frameAt(x){this.pos=Math.max(this.pos,x);this.trim();const h=this.fs.fd*.5;let f=null;for(const q of this.q){if(q.timestamp/1e6<=x+h)f=q;else break}return f||(this.q[0]&&this.q[0].timestamp/1e6<x+.15?this.q[0]:null)}
+  // 今の時刻に合うコマだけを返す（カットした部分や遅れたコマは表示しない＝早送りに見えない）
+  frameAt(x){this.pos=Math.max(this.pos,x);this.trim();const h=this.fs.fd*.5,lo=x-Math.max(.1,this.fs.fd*3);let f=null;for(const q of this.q){const t=q.timestamp/1e6;if(t<=x+h){if(t>=lo)f=q}else break}return f}
   pump(x){this.pos=Math.max(this.pos,x);if(this.feeding||!this.dec||this.broken)return;this.feeding=true;const g=this.gen;
     (async()=>{try{const S=this.fs.samples;
       while(g===this.gen&&this.next<S.length&&this.dec.decodeQueueSize<8&&this.q.length<8&&(this.fedT<this.pos+.8)){
@@ -1081,7 +1082,7 @@ function wcSchedule(t){const until=t+2;if(PB.schedUntil>=until)return;const from
 function wcTick(){const t=wcNow();if(t>=tlDur-1e-3){fireSfx(lastTl,tlDur);lastTl=tlDur;S.tl=tlDur;finishPlay();return}
   wcSchedule(t);
   // 次のカット点の先を裏でデコードしておく
-  const p=pieceAt(t);if(p){const i=eff.indexOf(p),nx=eff[i+1];if(nx&&nx.t-t<1.2){const r=SRC[nx.src];const contig=nx.src===p.src&&Math.abs(nx.s-p.e)<.05;if(r&&r.fs&&!contig)r.fs.prefetch(nx.s)}}
+  const p=pieceAt(t);if(p){const i=eff.indexOf(p),nx=eff[i+1];if(nx&&nx.t-t<2){const r=SRC[nx.src];const contig=nx.src===p.src&&Math.abs(nx.s-p.e)<.05;if(r&&r.fs&&!contig)r.fs.prefetch(nx.s)}}
   fireSfx(lastTl,t);lastTl=t;S.tl=t;dirty=true}
 
 // カット点の先を「音を消して少し前から再生」しておき、つなぎ目で表示と音を切り替える（止まらない）
