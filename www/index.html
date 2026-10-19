@@ -932,7 +932,7 @@ async function decodeAdts(file,au,dur,prog){if(!au.codec.startsWith('mp4a')||!au
 
 /* ================= 音声 ================= */
 let actx=null,master,speaker,origG,sfxG,bgmG,recDest=null,bgmNode=null;
-function hookAudio(id){const rt=SRC[id];if(!actx||!rt||rt.kind!=='video')return;for(const el of rt.els||[rt.el]){if(el._node)continue;try{el._node=actx.createMediaElementSource(el);el._node.connect(origG)}catch(e){}}}
+function hookAudio(id){const rt=SRC[id];if(!actx||!rt||rt.kind!=='video')return;for(const el of rt.els||[rt.el]){if(el._node)continue;try{el._node=actx.createMediaElementSource(el);el._g=actx.createGain();el._node.connect(el._g);el._g.connect(origG)}catch(e){}}}
 function ensureAudio(){
   if(!actx){const AC=window.AudioContext||window.webkitAudioContext;actx=new AC();master=actx.createGain();speaker=actx.createGain();master.connect(speaker);speaker.connect(actx.destination);
     origG=actx.createGain();sfxG=actx.createGain();bgmG=actx.createGain();origG.connect(master);sfxG.connect(master);bgmG.connect(master);applyVol();buildSfx()}
@@ -998,15 +998,20 @@ function seekPlayer(pl,x){return new Promise(r=>{if(!(pl instanceof VPlayer)){pl
   el.addEventListener('seeked',chk);let to=setTimeout(function w(){if(near()||tries>=3)fin();else{tries++;pl.currentTime=x;to=setTimeout(w,1200)}},1200);
   pl.currentTime=x;if(near())setTimeout(chk,0)})}
 let lastTl=0;
-function prepareNext(p){const i=eff.indexOf(p),nx=eff[i+1];if(!nx)return;const r=SRC[nx.src];if(!r||!r.players)return;
-  if(nx.src===p.src){if(Math.abs(nx.t-(p.t+plen(p)))<1e-3&&Math.abs(nx.s-p.e)<.03)return;const alt=r.players[1-r.act];if(!alt.paused)alt.pause();alt.currentTime=nx.s;alt.prep=nx.s}
-  else if(r.player.paused){r.player.currentTime=nx.s;r.player.prep=nx.s}}
+// カット点の先を「音を消して少し前から再生」しておき、つなぎ目で表示と音を切り替える（止まらない）
+const LEAD=.4;
+function elGain(el,v){if(el&&el._g)el._g.gain.value=v}
+function prepareNext(p){PB.pre=null;const i=eff.indexOf(p),nx=eff[i+1];if(!nx)return;const r=SRC[nx.src];if(!r||!r.players)return;
+  let pl;if(nx.src===p.src){if(Math.abs(nx.t-(p.t+plen(p)))<1e-3&&Math.abs(nx.s-p.e)<.03)return;pl=r.players[1-r.act]}else pl=r.player;
+  if(!pl.paused)pl.pause();elGain(pl.el,0);const roll=plen(p)>LEAD+.15&&nx.s>=LEAD*.5;pl.currentTime=roll?Math.max(0,nx.s-LEAD):nx.s;PB.pre={piece:nx,pl,r,roll,rolled:false}}
 async function enterAt(t,force){const p=pieceAt(t);PB.p=p;
-  if(p&&SRC[p.src]&&SRC[p.src].players){const r=SRC[p.src],alt=r.players[1-r.act],x0=p.s+(t-p.t);
-    if(alt.prep!=null&&Math.abs(alt.prep-x0)<.1&&!alt.el.seeking&&alt.el.readyState>=2){const cur=r.player;r.act=1-r.act;alt.prep=null;if(!cur.paused)cur.pause()}}
-  if(p&&playerOf(p.src)){const pl=playerOf(p.src);pauseAll(pl);PB.mode='media';const x=p.s+(t-p.t);PB.chk={x,t,n:performance.now(),k:0};
+  const pre=PB.pre;PB.pre=null;
+  if(p&&pre&&pre.piece===p&&!force){const r=pre.r,pl=pre.pl;const k=r.players.indexOf(pl);if(k>=0)r.act=k;elGain(pl.el,1);pauseAll(pl);PB.mode='media';const x=p.s+(t-p.t);
+    if(!pre.rolled||Math.abs(pl.currentTime-x)>.35){if(!pl.paused&&pre.rolled)pl.pause();PB.wait=true;if(exporting)await expPause();await seekPlayer(pl,x);if(exporting)await expResume();PB.wait=false}
+    PB.chk=null;if(!S.playing)return;if(pl.paused){try{await pl.play()}catch(e){}}prepareNext(p);return}
+  if(p&&playerOf(p.src)){const pl=playerOf(p.src);elGain(pl.el,1);pauseAll(pl);PB.mode='media';const x=p.s+(t-p.t);PB.chk={x,t,n:performance.now(),k:0};
     if(force||pl.pending||(pl.el&&pl.el.seeking)||Math.abs(pl.currentTime-x)>.06){PB.wait=true;if(exporting)await expPause();await seekPlayer(pl,x);if(exporting)await expResume();PB.wait=false}
-    if(!S.playing)return;try{await pl.play()}catch(e){}pl.prep=null;prepareNext(p)}
+    if(!S.playing)return;try{await pl.play()}catch(e){}prepareNext(p)}
   else{pauseAll(null);PB.mode='clock';PB.t0=t;PB.n0=performance.now();const nx=eff.find(q=>q.t>t+1e-6);PB.end=p?p.t+plen(p):(nx?nx.t:tlDur)}}
 function fireSfx(a,b){if(b-a>.6||b<a)return;for(const x of S.sfx){if(x.t>a&&x.t<=b)playBuf(sfxById(x.snd)?.buf,0,x.vol)}}
 function tick(){if(!S.playing||PB.wait)return;let t;
@@ -1014,6 +1019,7 @@ function tick(){if(!S.playing||PB.wait)return;let t;
     // 再生開始直後に位置がずれていたら（シークが無視された場合）指定位置へ戻す
     const c=PB.chk;if(c&&pl.el&&!pl.paused){const el=(performance.now()-c.n)/1000;if(el>1.6)PB.chk=null;else if(el>.25&&c.k<2&&Math.abs(x-(c.x+el))>.5){c.k++;const tt=c.t+el;PB.chk=null;enterAt(tt,true);return}}
     t=p.t+clamp(x-p.s,0,plen(p));
+    const pre=PB.pre;if(pre&&pre.roll&&!pre.rolled&&p.e-x<=LEAD&&!pre.pl.el.seeking){pre.rolled=true;elGain(pre.pl.el,0);pre.pl.play().catch(()=>{})}
     if(x>=p.e-.015||pl.ended){const endT=p.t+plen(p);const nx=eff[eff.indexOf(p)+1];
       if(nx&&nx.src===p.src&&Math.abs(nx.t-endT)<1e-3&&Math.abs(nx.s-p.e)<.03&&!pl.ended){PB.p=nx;t=endT}
       else{advance(endT);return}}}
@@ -1022,7 +1028,7 @@ function tick(){if(!S.playing||PB.wait)return;let t;
 function advance(t){fireSfx(lastTl,t);lastTl=t;S.tl=t;dirty=true;if(t>=tlDur-1e-3){S.tl=tlDur;finishPlay();return}enterAt(t+1e-4)}
 function finishPlay(){pause();if(exporting&&exporting.done)exporting.done()}
 async function play(){if(tlDur<=0)return;ensureAudio();if(S.tl>=tlDur-.05)S.tl=0;S.playing=true;lastTl=S.tl;setPlayIco();await enterAt(S.tl,true);startBgm(S.tl)}
-function pause(){S.playing=false;PB.wait=false;pauseAll(null);stopBgm();setPlayIco();req()}
+function pause(){S.playing=false;PB.wait=false;PB.pre=null;pauseAll(null);for(const k in SRC)for(const e of SRC[k].els||[])elGain(e,1);stopBgm();setPlayIco();req()}
 function setPlayIco(){const p=S.playing?'<path d="M7 4h4v16H7zM14 4h4v16h-4z"/>':'<path d="M7 4v16l13-8z"/>';$('#playIco').innerHTML=p;$('#fsIco').innerHTML=p}
 function seekPreview(){const p=pieceAt(S.tl);if(p){const rt=SRC[p.src];if(rt&&rt.kind==='video')rt.player.currentTime=p.s+(S.tl-p.t)}req()}
 
