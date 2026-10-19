@@ -453,7 +453,7 @@ const S={
   bgmClip:{t:0,len:null,offset:0},
   split:{maxLine:12,lines:2,mode:'bunsetsu'},
   sil:{thr:-42,min:.45,keep:.15},
-  tl:0, zoom:70, tlY:0, playing:false, sel:null, panel:null, exportRes:720, sfxCat:'お気に入り',
+  tl:0, zoom:70, tlY:0, playing:false, sel:null, panel:null, exportRes:720, sfxCat:'マイ効果音',
   ui:Object.assign({tab:'style',sub:'fill',stroke:0,shadow:0,acat:'in',itab:'place',applyAll:false,expand:false,fullVH:.5,dockVH:.3},LS.get('kiri.ui',{})),
 };
 S.ui.tab=S.ui.tab||'style';
@@ -972,7 +972,6 @@ const SFX_DEF=[
   ['pon','その他','ポン',.3,(o,d)=>{const s=osc(o,'sine',650);s.frequency.exponentialRampToValueAtTime(280,.12);chain(s,env(o,0,.003,.8,.14),d);s.start()}],
 ];
 async function buildSfx(){if(sfxBuilt)return;sfxBuilt=true;
-  for(const [id,cat,name,dur,fn] of SFX_DEF){try{SFX.push({id,cat,name,buf:await synth(dur,fn)})}catch(e){}}
   const keys=await IDB.keys();for(const k of keys||[]){if(!String(k).startsWith('sfx:'))continue;const v=await IDB.get(k);if(!v)continue;try{const buf=await actx.decodeAudioData(v.data.slice(0));SFX.push({id:k,cat:'マイ効果音',name:v.name,buf})}catch(e){}}
   if(S.panel==='sfx')renderPanel();req();
 }
@@ -1619,10 +1618,10 @@ function renderPanel(fresh){const k=S.panel;if(!k)return;const keep=!fresh&&shee
      <button data-act="rebuild" ${S.chars.length?'':'disabled'}>字幕を作り直す</button></div>
      <div class="sheet-h4">誤字をまとめて修正</div><div class="row"><input type="text" id="rpA" placeholder="誤" style="flex:1"><span>→</span><input type="text" id="rpB" placeholder="正" style="flex:1"><button data-act="replace">全置換</button></div>
      <div class="sheet-h4">字幕一覧</div><div class="list">${list.map(x=>`<div class="li ${c&&c.id===x.id?'on':''}" data-cap="${x.id}"><span class="t">${isFinite(capTl(x))?fmt(capTl(x)):'カット中'}</span><span class="x">${esc(x.text)}</span><button data-act="capedit" data-v="${x.id}">編集</button></div>`).join('')||'<p class="hint">まだありません</p>'}</div>`}
-  if(k==='sfx'){const x=S.sel&&S.sel.kind==='sfx'?selItem():null,fav=LS.get('kiri.fav',['pashi','pikon','dokan','do']);const cat=S.sfxCat||'お気に入り';const cats=['お気に入り','ツッコミ','驚き','爆発','笑い','その他','マイ効果音'];
+  if(k==='sfx'){const x=S.sel&&S.sel.kind==='sfx'?selItem():null,fav=LS.get('kiri.fav',[]).filter(id=>sfxById(id));const cat=S.sfxCat||'マイ効果音';const cats=['マイ効果音','お気に入り'];
     const list=cat==='お気に入り'?fav.map(sfxById).filter(Boolean):SFX.filter(s=>s.cat===cat);
     h=shTop('効果音',`<span class="badge">＋で再生位置に挿入</span>`)+`<div class="chips" style="margin-top:4px">${cats.map(c=>`<button class="chip ${c===cat?'on':''}" data-act="scat" data-v="${c}">${c==='お気に入り'?'★ ':''}${c}</button>`).join('')}</div>
-     <div class="grid">${list.map(s=>`<div class="snd"><button class="p" data-act="sprev" data-v="${s.id}">${esc(s.name)}</button><button class="f ${fav.includes(s.id)?'on':''}" data-act="sfav" data-v="${s.id}" aria-label="お気に入り">★</button><button class="a" data-act="sadd" data-v="${s.id}" aria-label="挿入">＋</button></div>`).join('')||`<p class="hint">${sfxBuilt?'ここにはまだありません':'音を準備中… 画面をタップすると始まります'}</p>`}</div>
+     <div class="grid">${list.map(s=>`<div class="snd"><button class="p" data-act="sprev" data-v="${s.id}">${esc(s.name)}</button><button class="f ${fav.includes(s.id)?'on':''}" data-act="sfav" data-v="${s.id}" aria-label="お気に入り">★</button><button class="a" data-act="sadd" data-v="${s.id}" aria-label="挿入">＋</button></div>`).join('')||`<p class="hint">${cat==='お気に入り'?'★を押した効果音がここに並びます。':'まだ効果音がありません。下の「自分の効果音を追加」から音声ファイル（mp3・wav・m4a）を入れてください。'}</p>`}</div>
      <div class="row"><button data-act="sfximport">自分の効果音を追加</button></div>${rng('効果音の音量','audio.sfx',0,1.5,.05,S.audio.sfx)}`+
      (x?`<div class="sheet-h4">選択中: ${esc(sfxById(x.snd)?.name||'')} <span class="tc">${fmt(x.t)}</span></div>${rng('この音の音量','sx.vol',0,2,.05,x.vol)}<div class="row"><button data-act="nud" data-d="-0.1">−0.1</button><button data-act="nud" data-d="0.1">+0.1</button><button data-act="toHead">再生位置へ</button></div>`:'')}
   if(k==='bgm'){const c=S.bgmClip;h=shTop('BGM・音量')+`<div class="row"><button class="pri" data-act="bgmopen">${bgm?'BGMを変更':'BGMを読み込む'}</button>${bgm?`<span class="badge">${esc(bgm.name)}</span><span class="tc">${fmt(c.t)}〜${fmt(bgmEnd())}</span>`:''}</div>`+
