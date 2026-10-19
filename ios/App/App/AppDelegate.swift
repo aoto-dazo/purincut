@@ -83,9 +83,17 @@ public class PurinNativePlugin: CAPPlugin, CAPBridgedPlugin, PHPickerViewControl
         CAPPluginMethod(name: "playerSeek", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "playerTime", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "playerVolume", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "setBackground", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "setBackground", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "endFile", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "exportStart", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "exportStatus", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "exportCancel", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "clearTemp", returnType: CAPPluginReturnPromise)
     ]
     let purinPlayer = PurinPlayer()
+    let purinExporter = PurinExporter()
+    func tmpFileURL(_ name: String) -> URL { tmpDir().appendingPathComponent((name as NSString).lastPathComponent) }
+    func closeWriting(_ id: String) { if let fh = writing[id] { try? fh.close(); writing[id] = nil } }
 
     private var pickCall: CAPPluginCall?
 
@@ -461,49 +469,17 @@ final class PurinPlayer {
             let W = CGFloat((o["W"] as? NSNumber)?.doubleValue ?? 1080), H = CGFloat((o["H"] as? NSNumber)?.doubleValue ?? 1920)
             let fps = max(1, (o["fps"] as? NSNumber)?.doubleValue ?? 30)
             let pieces = o["pieces"] as? [[String: Any]] ?? []
-            let comp = AVMutableComposition()
-            guard let vt = comp.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) else { done("合成できません"); return }
-            let at = comp.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid)
-            var transform: CGAffineTransform?
-            var natural = CGSize(width: 1080, height: 1920)
-            do {
-                for p in pieces {
-                    guard let name = p["name"] as? String else { continue }
-                    let s = (p["s"] as? NSNumber)?.doubleValue ?? 0, e = (p["e"] as? NSNumber)?.doubleValue ?? 0, t = (p["t"] as? NSNumber)?.doubleValue ?? 0
-                    if e - s < 0.001 { continue }
-                    let asset: AVURLAsset
-                    if let a = self.assets[name] { asset = a } else { asset = AVURLAsset(url: mediaURL(name), options: [AVURLAssetPreferPreciseDurationAndTimingKey: true]); self.assets[name] = asset }
-                    guard let sv = asset.tracks(withMediaType: .video).first else { continue }
-                    if transform == nil { transform = sv.preferredTransform; natural = sv.naturalSize }
-                    let at0 = PurinPlayer.ct(t)
-                    let end = vt.timeRange.end
-                    if CMTimeCompare(at0, end) > 0 {
-                        vt.insertEmptyTimeRange(CMTimeRange(start: end, end: at0))
-                    }
-                    let range = CMTimeRange(start: PurinPlayer.ct(s), end: PurinPlayer.ct(e))
-                    try vt.insertTimeRange(range, of: sv, at: vt.timeRange.end)
-                    if let at = at {
-                        let aend = at.timeRange.end
-                        if CMTimeCompare(at0, aend) > 0 { at.insertEmptyTimeRange(CMTimeRange(start: aend, end: at0)) }
-                        if let sa = asset.tracks(withMediaType: .audio).first {
-                            try at.insertTimeRange(range, of: sa, at: at.timeRange.end)
-                        } else {
-                            at.insertEmptyTimeRange(CMTimeRange(start: at.timeRange.end, duration: range.duration))
-                        }
-                    }
-                }
-            } catch {
-                done("合成できません: \(error.localizedDescription)"); return
-            }
-            if let tf = transform { vt.preferredTransform = tf }
-            self.audioTrackID = at?.trackID ?? kCMPersistentTrackID_Invalid
+            let built: BuiltComp
+            do { built = try purinBuildComposition(o, assets: &self.assets, mediaURL: mediaURL) } catch { done("合成できません: \(error.localizedDescription)"); return }
+            let comp = built.comp, transform: CGAffineTransform? = built.transform, natural = built.natural
+            self.audioTrackID = built.audioID
             let spec = RenderSpec(o, W: W, H: H, natural: natural, transform: transform ?? .identity)
             let vc = AVMutableVideoComposition(asset: comp) { req in
                 let out = spec.render(req.sourceImage, time: CMTimeGetSeconds(req.compositionTime))
                 req.finish(with: out, context: nil)
             }
             vc.renderSize = CGSize(width: W, height: H)
-            vc.frameDuration = CMTime(value: 1, timescale: CMTimeScale(fps.rounded()))
+            vc.frameDuration = purinFrameDuration(fps)
             let item = AVPlayerItem(asset: comp)
             item.videoComposition = vc
             DispatchQueue.main.async {
@@ -647,5 +623,171 @@ struct RenderSpec {
             out = piece.composited(over: out)
         }
         return out.cropped(to: full)
+    }
+}
+
+
+// MARK: - 合成（再生と書き出しで共通）
+struct BuiltComp { let comp: AVMutableComposition; let audioID: CMPersistentTrackID; let transform: CGAffineTransform; let natural: CGSize }
+func purinCT(_ s: Double) -> CMTime { CMTime(seconds: max(0, s), preferredTimescale: 60000) }
+func purinFrameDuration(_ fps: Double) -> CMTime {
+    if abs(fps - fps.rounded()) > 0.01 { return CMTime(value: 1001, timescale: CMTimeScale((fps * 1001).rounded())) }
+    return CMTime(value: 1, timescale: CMTimeScale(max(1, fps.rounded())))
+}
+func purinBuildComposition(_ o: [String: Any], assets: inout [String: AVURLAsset], mediaURL: (String) -> URL) throws -> BuiltComp {
+    let pieces = o["pieces"] as? [[String: Any]] ?? []
+    let comp = AVMutableComposition()
+    guard let vt = comp.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) else { throw NSError(domain: "purin", code: 10, userInfo: [NSLocalizedDescriptionKey: "映像トラックを作れません"]) }
+    let at = comp.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid)
+    var transform: CGAffineTransform?
+    var natural = CGSize(width: 1080, height: 1920)
+    for p in pieces {
+        guard let name = p["name"] as? String else { continue }
+        let s = (p["s"] as? NSNumber)?.doubleValue ?? 0, e = (p["e"] as? NSNumber)?.doubleValue ?? 0, t = (p["t"] as? NSNumber)?.doubleValue ?? 0
+        if e - s < 0.001 { continue }
+        let asset: AVURLAsset
+        if let a = assets[name] { asset = a } else { asset = AVURLAsset(url: mediaURL(name), options: [AVURLAssetPreferPreciseDurationAndTimingKey: true]); assets[name] = asset }
+        guard let sv = asset.tracks(withMediaType: .video).first else { continue }
+        if transform == nil { transform = sv.preferredTransform; natural = sv.naturalSize }
+        let at0 = purinCT(t)
+        let end = vt.timeRange.end
+        if CMTimeCompare(at0, end) > 0 { vt.insertEmptyTimeRange(CMTimeRange(start: end, end: at0)) }
+        let range = CMTimeRange(start: purinCT(s), end: purinCT(e))
+        try vt.insertTimeRange(range, of: sv, at: vt.timeRange.end)
+        if let at = at {
+            let aend = at.timeRange.end
+            if CMTimeCompare(at0, aend) > 0 { at.insertEmptyTimeRange(CMTimeRange(start: aend, end: at0)) }
+            if let sa = asset.tracks(withMediaType: .audio).first {
+                try at.insertTimeRange(range, of: sa, at: at.timeRange.end)
+            } else {
+                at.insertEmptyTimeRange(CMTimeRange(start: at.timeRange.end, duration: range.duration))
+            }
+        }
+    }
+    // 最後の空白（テロップだけの部分など）も長さに含める
+    if let dur = (o["dur"] as? NSNumber)?.doubleValue {
+        let want = purinCT(dur), end = vt.timeRange.end
+        if CMTimeCompare(want, end) > 0 { vt.insertEmptyTimeRange(CMTimeRange(start: end, end: want)) }
+    }
+    if let tf = transform { vt.preferredTransform = tf }
+    return BuiltComp(comp: comp, audioID: at?.trackID ?? kCMPersistentTrackID_Invalid, transform: transform ?? .identity, natural: natural)
+}
+
+// MARK: - 書き出し（iPhoneの動画エンジンで合成・エンコードし、カメラロールへ保存）
+final class PurinExporter {
+    private(set) var state = "idle"
+    private(set) var message = ""
+    private var session: AVAssetExportSession?
+    private var assets: [String: AVURLAsset] = [:]
+    var progress: Double { state == "running" ? Double(session?.progress ?? 0) : (state == "idle" ? 0 : 1) }
+
+    func cancel() { session?.cancelExport(); state = "cancelled" }
+
+    func start(_ o: [String: Any], mediaURL: @escaping (String) -> URL, tmpURL: @escaping (String) -> URL) {
+        state = "running"; message = ""
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let built = try purinBuildComposition(o, assets: &self.assets, mediaURL: mediaURL)
+                let comp = built.comp
+                let W = CGFloat((o["W"] as? NSNumber)?.doubleValue ?? 1080), H = CGFloat((o["H"] as? NSNumber)?.doubleValue ?? 1920)
+                let RW = CGFloat((o["renderW"] as? NSNumber)?.doubleValue ?? Double(W)), RH = CGFloat((o["renderH"] as? NSNumber)?.doubleValue ?? Double(H))
+                let fps = max(1, (o["fps"] as? NSNumber)?.doubleValue ?? 30)
+                // 効果音・BGMを混ぜた音声（Web側で作ったWAV）
+                var extraID: CMPersistentTrackID = kCMPersistentTrackID_Invalid
+                if let ex = o["extraAudio"] as? String {
+                    let a = AVURLAsset(url: tmpURL(ex))
+                    if let src = a.tracks(withMediaType: .audio).first, let t = comp.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) {
+                        let len = CMTimeMinimum(a.duration, comp.duration)
+                        try t.insertTimeRange(CMTimeRange(start: .zero, duration: len), of: src, at: .zero)
+                        extraID = t.trackID
+                    }
+                }
+                // テロップ・画像（Web側で描いた透明PNG）
+                struct Ov { let t0: Double; let t1: Double; let url: URL }
+                let ovs: [Ov] = (o["overlays"] as? [[String: Any]] ?? []).compactMap {
+                    guard let f = $0["file"] as? String else { return nil }
+                    return Ov(t0: ($0["t0"] as? NSNumber)?.doubleValue ?? 0, t1: ($0["t1"] as? NSNumber)?.doubleValue ?? 0, url: tmpURL(f))
+                }
+                let cache = NSCache<NSURL, CIImage>(); cache.countLimit = 6
+                let spec = RenderSpec(o, W: W, H: H, natural: built.natural, transform: built.transform)
+                let k = RW / W
+                let vc = AVMutableVideoComposition(asset: comp) { req in
+                    let t = CMTimeGetSeconds(req.compositionTime)
+                    var out = spec.render(req.sourceImage, time: t).transformed(by: CGAffineTransform(scaleX: k, y: k))
+                    // 二分探索で今の時刻のテロップ画像を探す
+                    var lo = 0, hi = ovs.count - 1, hit: Ov?
+                    while lo <= hi { let m = (lo + hi) / 2; if ovs[m].t1 <= t { lo = m + 1 } else if ovs[m].t0 > t { hi = m - 1 } else { hit = ovs[m]; break } }
+                    if let h = hit {
+                        var img = cache.object(forKey: h.url as NSURL)
+                        if img == nil, let i = CIImage(contentsOf: h.url) { img = i; cache.setObject(i, forKey: h.url as NSURL) }
+                        if let i = img { out = i.composited(over: out) }
+                    }
+                    req.finish(with: out.cropped(to: CGRect(x: 0, y: 0, width: RW, height: RH)), context: nil)
+                }
+                vc.renderSize = CGSize(width: RW, height: RH)
+                vc.frameDuration = purinFrameDuration(fps)
+                let mix = AVMutableAudioMix(); var params: [AVMutableAudioMixInputParameters] = []
+                if built.audioID != kCMPersistentTrackID_Invalid, let t = comp.track(withTrackID: built.audioID) {
+                    let p = AVMutableAudioMixInputParameters(track: t); p.setVolume(Float((o["origVol"] as? NSNumber)?.doubleValue ?? 1), at: .zero); params.append(p)
+                }
+                if extraID != kCMPersistentTrackID_Invalid, let t = comp.track(withTrackID: extraID) {
+                    let p = AVMutableAudioMixInputParameters(track: t); p.setVolume(1, at: .zero); params.append(p)
+                }
+                mix.inputParameters = params
+                let preset = RW * RH > 1280 * 720 * 1.1 ? AVAssetExportPresetHighestQuality : AVAssetExportPresetHighestQuality
+                guard let ses = AVAssetExportSession(asset: comp, presetName: preset) else { throw NSError(domain: "purin", code: 11, userInfo: [NSLocalizedDescriptionKey: "書き出しを開始できません"]) }
+                let out = tmpURL("purincut_export_\(Int(Date().timeIntervalSince1970)).mp4")
+                try? FileManager.default.removeItem(at: out)
+                ses.outputURL = out
+                ses.outputFileType = .mp4
+                ses.videoComposition = vc
+                ses.audioMix = mix
+                ses.shouldOptimizeForNetworkUse = true
+                self.session = ses
+                ses.exportAsynchronously {
+                    if ses.status == .completed {
+                        self.state = "saving"
+                        PHPhotoLibrary.requestAuthorization(for: .addOnly) { st in
+                            guard st == .authorized || st == .limited else { self.state = "failed"; self.message = "写真への保存が許可されていません（設定アプリ → ぷりんCut → 写真）"; return }
+                            PHPhotoLibrary.shared().performChanges({ PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: out) }) { ok, err in
+                                try? FileManager.default.removeItem(at: out)
+                                if ok { self.state = "saved" } else { self.state = "failed"; self.message = err?.localizedDescription ?? "保存できませんでした" }
+                            }
+                        }
+                    } else if ses.status == .cancelled {
+                        self.state = "cancelled"
+                    } else {
+                        self.state = "failed"; self.message = ses.error?.localizedDescription ?? "書き出しに失敗しました"
+                    }
+                }
+            } catch {
+                self.state = "failed"; self.message = error.localizedDescription
+            }
+        }
+    }
+}
+
+extension PurinNativePlugin {
+    @objc func endFile(_ call: CAPPluginCall) {
+        if let id = call.getString("id") { closeWriting(id) }
+        call.resolve()
+    }
+    @objc func exportStart(_ call: CAPPluginCall) {
+        guard let obj = call.options as? [String: Any] else { call.reject("データがありません"); return }
+        purinExporter.start(obj, mediaURL: { self.mediaURL($0) }, tmpURL: { self.tmpFileURL($0) })
+        call.resolve()
+    }
+    @objc func exportStatus(_ call: CAPPluginCall) {
+        call.resolve(["state": purinExporter.state, "progress": purinExporter.progress, "message": purinExporter.message])
+    }
+    @objc func exportCancel(_ call: CAPPluginCall) {
+        purinExporter.cancel(); call.resolve()
+    }
+    @objc func clearTemp(_ call: CAPPluginCall) {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("purin", isDirectory: true)
+        if let items = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) {
+            for u in items where u.pathExtension == "png" || u.pathExtension == "wav" { try? FileManager.default.removeItem(at: u) }
+        }
+        call.resolve()
     }
 }

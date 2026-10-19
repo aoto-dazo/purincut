@@ -687,7 +687,7 @@ let boxes=[],guides={xs:[],ys:[]};
 function drawFrame(ctx,W,H,tl,preview,ovOnly){
   const rs=W/LW;ctx.setTransform(rs,0,0,rs,0,0);ctx.globalAlpha=1;ctx.filter='none';
   // アプリ版：映像はネイティブのプレーヤーが後ろに描くので、ここでは文字や画像だけを描く
-  const natV=(preview||ovOnly)&&typeof NP!=='undefined'&&NP.on&&!exporting;
+  const natV=ovOnly===2||((preview||ovOnly)&&typeof NP!=='undefined'&&NP.on&&!exporting);
   if(natV)ctx.clearRect(0,0,LW,LH);else{ctx.fillStyle='#000';ctx.fillRect(0,0,LW,LH)}
   const sa=srcAt(tl);let el=null,vw=0,vh=0;const segA=sa?(segAtTl(tl)||{}).adj:null,aOn=adjOn(segA),useGL=aOn&&GLA.ok,aF=aOn&&!useGL&&FILTER_OK?adjFilter(segA):null;
   if(sa){const rt=SRC[sa.src];if(rt){if(rt.kind==='demo')rt.player.draw(sa.x);el=rt.el;vw=rt.vw;vh=rt.vh;
@@ -1745,9 +1745,9 @@ function renderPanel(fresh){const k=S.panel;if(!k)return;const keep=!fresh&&shee
     ${TPL_CATS.map(c=>`<div class="sheet-h4">${c}</div><div class="tpls">${BUILTIN_TPL.filter(t=>t.cat===c).map(t=>tplCard(t,false)).join('')}</div>`).join('')}`}
   if(k==='exp'){const mime=pickMime();
     h=shTop('書き出し')+`<div class="row"><label>画質</label><span class="seg">${[720,1080].map(r=>`<button data-act="res" data-v="${r}" class="${S.exportRes===r?'on':''}">${LW>LH?`${r*16/9}×${r}`:`${r}×${r*16/9}`}</button>`).join('')}</span></div>
-    <div class="row"><span class="badge">長さ ${fmt(tlDur)}</span><span class="badge">${mime?mime.split(';')[0]:'この端末は録画非対応'}</span><span class="badge">${fmtFps(projFps())}fps</span></div>
-    <div class="row"><button class="pri" data-act="export" ${mime&&!exporting?'':'disabled'}>書き出し開始</button><button data-act="cancelexp" ${exporting?'':'disabled'}>中止</button></div>
-    <div class="bar"><i id="expBar"></i></div><p class="hint" id="expInfo">実時間で録画します（1分の動画なら約1分）。終わるまで画面を消さず、このタブを開いたままにしてください。</p><div id="expOut"></div>`}
+    <div class="row"><span class="badge">長さ ${fmt(tlDur)}</span><span class="badge">${npCanExport()?'MP4（iPhoneで処理）':mime?mime.split(';')[0]:'この端末は録画非対応'}</span><span class="badge">${fmtFps(projFps())}fps</span></div>
+    <div class="row"><button class="pri" data-act="export" ${(mime||npCanExport())&&!exporting?'':'disabled'}>書き出し開始</button><button data-act="cancelexp" ${exporting?'':'disabled'}>中止</button></div>
+    <div class="bar"><i id="expBar"></i></div><p class="hint" id="expInfo">${npCanExport()?'iPhoneの動画エンジンで書き出し、終わるとカメラロールに保存します。':'実時間で録画します（1分の動画なら約1分）。終わるまで画面を消さず、このタブを開いたままにしてください。'}</p><div id="expOut"></div>`}
   sheet.innerHTML=h;sheet.dataset.p=k;sheet.scrollTop=keep;refreshTiles();initPickers()}
 function tplCard(t,user){return `<div class="tpl"><canvas data-tplc="${t.id}"></canvas><div class="n">${esc(t.name)}</div><div class="r"><button data-act="tplapply" data-v="${t.id}">適用</button>${user?`<button class="danger" data-act="tpldel" data-v="${t.id}">削除</button>`:''}</div></div>`}
 function allTpl(){return[...LS.get('kiri.tpl',[]).map(t=>Object.assign(t,{style:normStyle(t.style)})),...BUILTIN_TPL]}
@@ -1878,7 +1878,7 @@ sheet.addEventListener('click',async e=>{
       LS.set('kiri.tpl',[t,...LS.get('kiri.tpl',[])]);renderPanel();toast('保存しました')},
     tplapply:()=>{const t=allTpl().find(x=>x.id===v);if(!t)return;pushUndo();S.capStyle=normStyle(t.style);for(const c of S.captions)c.style=clone(S.capStyle);if(t.layout)S.layout=clone(t.layout);if(t.audio){Object.assign(S.audio,t.audio);applyVol()}req();autosave();toast(`「${t.name}」を適用しました`)},
     tpldel:()=>{LS.set('kiri.tpl',LS.get('kiri.tpl',[]).filter(x=>x.id!==v));renderPanel()},
-    res:()=>{S.exportRes=+v;renderPanel()}, export:startExport, cancelexp:()=>{if(exporting){exporting.cancel=true;finishPlay()}},
+    res:()=>{S.exportRes=+v;renderPanel()}, export:startExport, cancelexp:()=>{if(exporting){exporting.cancel=true;if(!exporting.native)finishPlay()}},
     save:saveExport,
   })[a]?.();
 });
@@ -1985,7 +1985,50 @@ const fmtFps=f=>Number.isInteger(f)?String(f):f.toFixed(2);
 function pickMime(){if(!window.MediaRecorder)return null;for(const m of ['video/mp4;codecs=avc1.42E01E,mp4a.40.2','video/mp4','video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm'])try{if(MediaRecorder.isTypeSupported(m))return m}catch(e){}return null}
 async function expPause(){const x=exporting;if(x&&x.rec.state==='recording'){x.rec.pause();try{await actx.suspend()}catch(_){}}}
 async function expResume(){const x=exporting;if(x&&x.rec.state==='paused'){try{await actx.resume()}catch(_){}x.rec.resume()}}
-async function startExport(){if(tlDur<=0||exporting)return;pause();ensureAudio();const mime=pickMime();if(!mime)return;
+/* ================= アプリ版の書き出し（iPhoneの動画エンジンで合成・エンコード） ================= */
+function npCanExport(){if(!NATIVE)return false;const ids=new Set(S.segments.map(g=>g.src));if(!ids.size)return false;for(const id of ids){const m=srcMeta(id);if(!m||!m.nat)return false}return true}
+async function natSendBlob(name,blob){const {id}=await nat('beginFile',{name});const CH=3<<20;
+  for(let o=0;o<blob.size;o+=CH){const u=new Uint8Array(await blob.slice(o,Math.min(blob.size,o+CH)).arrayBuffer());let s='';for(let i=0;i<u.length;i+=32768)s+=String.fromCharCode.apply(null,u.subarray(i,i+32768));await nat('appendFile',{id,data:btoa(s)})}
+  await nat('endFile',{id});return id}
+// 効果音とBGMだけを混ぜた音声（元の音声はiPhone側で合成する）
+async function renderExtraAudio(){if(!S.sfx.length&&!bgm)return null;const SR=48000,len=Math.ceil((tlDur+.1)*SR),oc=new OfflineAudioContext(2,len,SR);
+  const sg=oc.createGain();sg.gain.value=S.audio.sfx;sg.connect(oc.destination);let any=false;
+  for(const x of S.sfx){const b=sfxById(x.snd)?.buf;if(!b||x.t>=tlDur)continue;const n=oc.createBufferSource(),g=oc.createGain();n.buffer=b;g.gain.value=x.vol??1;n.connect(g);g.connect(sg);n.start(x.t);any=true}
+  if(bgm){const c=S.bgmClip,end=Math.min(bgmEnd(),tlDur),D=bgm.buf.duration;if(end>c.t){const n=oc.createBufferSource(),g=oc.createGain();n.buffer=bgm.buf;n.loop=true;g.gain.value=S.audio.bgm;n.connect(g);g.connect(oc.destination);
+    n.start(c.t,((c.offset||0)%D+D)%D);n.stop(end);if(S.audio.bgmFade){const fs=Math.max(c.t,end-2.5);g.gain.setValueAtTime(S.audio.bgm,fs);g.gain.linearRampToValueAtTime(0.0001,end)}any=true}}
+  if(!any)return null;const buf=await oc.startRendering();
+  const n=buf.length,dv=new DataView(new ArrayBuffer(44+n*4)),L=buf.getChannelData(0),Rr=buf.getChannelData(1);const w=(o,str)=>{for(let i=0;i<str.length;i++)dv.setUint8(o+i,str.charCodeAt(i))};
+  w(0,'RIFF');dv.setUint32(4,36+n*4,true);w(8,'WAVE');w(12,'fmt ');dv.setUint32(16,16,true);dv.setUint16(20,1,true);dv.setUint16(22,2,true);dv.setUint32(24,SR,true);dv.setUint32(28,SR*4,true);dv.setUint16(32,4,true);dv.setUint16(34,16,true);w(36,'data');dv.setUint32(40,n*4,true);
+  for(let i=0,o=44;i<n;i++,o+=4){dv.setInt16(o,Math.max(-1,Math.min(1,L[i]))*32767,true);dv.setInt16(o+2,Math.max(-1,Math.min(1,Rr[i]))*32767,true)}
+  return new Blob([dv.buffer],{type:'audio/wav'})}
+async function startExportNative(){pause();ensureAudio();const say=(m,pct)=>{const i=$('#expInfo');if(i)i.textContent=m;const b=$('#expBar');if(b&&pct!=null)b.style.width=pct.toFixed(1)+'%'};
+  exporting={native:true,cancel:false};renderPanel();let lock=null;try{lock=await navigator.wakeLock?.request('screen')}catch(e){}
+  try{await nat('clearTemp');
+    const fps=projFps(),R=S.exportRes,W=LW>LH?Math.round(R*16/9):R,H=LW>LH?R:Math.round(R*16/9);
+    // 1) テロップ・画像を透明な画像にして渡す（変化があるコマだけ）
+    const cv=document.createElement('canvas');cv.width=W;cv.height=H;const cx=cv.getContext('2d');const N=Math.ceil(tlDur*fps);const ovs=[];let last=null,k=0;
+    for(let i=0;i<N;i++){if(exporting.cancel)throw new Error('cancel');const t=i/fps,t1=(i+1)/fps;
+      const vis=S.overlays.filter(o=>t>=o.t&&t<o.t+o.d).sort((a,b)=>(a.track||2)-(b.track||2)).map(o=>[o.id,JSON.stringify(evalAnim(o.style.anims,t-o.t,o.d))]);
+      const sa=srcAt(t);const caps=sa?S.captions.filter(c=>c.src===sa.src&&sa.x>=c.s&&sa.x<c.e).map(c=>[c.id,JSON.stringify(evalAnim(c.style.anims,sa.x-c.s,c.e-c.s))]):[];
+      const sig=JSON.stringify([vis,caps]);
+      if(!vis.length&&!caps.length){last=null;continue}
+      if(last&&last.sig===sig&&Math.abs(last.t1-t)<1e-6){last.t1=t1;continue}
+      drawFrame(cx,W,H,t,false,2);const blob=await new Promise(r=>cv.toBlob(r,'image/png'));const name=`ov_${k++}.png`;await natSendBlob(name,blob);
+      last={t0:t,t1,file:name,sig};ovs.push(last);if(i%5===0)say(`テロップを準備中… ${Math.round(i/N*100)}%`,i/N*30)}
+    // 2) 効果音・BGM
+    say('効果音・BGMを準備中…',32);const wav=await renderExtraAudio();let extra=null;if(wav){await natSendBlob('extra.wav',wav);extra='extra.wav'}
+    // 3) iPhone側で合成・エンコード・保存
+    const proj=npProject();Object.assign(proj,{dur:tlDur,renderW:W,renderH:H,fps,origVol:S.audio.orig,extraAudio:extra,overlays:ovs.map(o=>({t0:o.t0,t1:o.t1,file:o.file}))});
+    await nat('exportStart',proj);
+    for(;;){await new Promise(r=>setTimeout(r,400));if(exporting.cancel){await nat('exportCancel');throw new Error('cancel')}
+      const st=await nat('exportStatus');if(st.state==='running')say(`書き出し中…（iPhoneで処理） ${Math.round(st.progress*100)}%`,35+st.progress*63);
+      else if(st.state==='saving')say('カメラロールに保存中…',99);
+      else if(st.state==='saved'){say('できました。カメラロールに保存しました。',100);toast('カメラロールに保存しました');break}
+      else if(st.state==='cancelled')throw new Error('cancel');
+      else if(st.state==='failed')throw new Error(st.message||'失敗しました')}}
+  catch(e){if(String(e&&e.message)==='cancel'){say('書き出しを中止しました',0);toast('書き出しを中止しました')}else{say('書き出しできませんでした：'+(e&&e.message||e),0);toast('書き出しできませんでした',3500)}}
+  finally{try{lock&&lock.release()}catch(e){}exporting=null;const b=$('[data-act=export]');if(b)b.disabled=false;const c=$('[data-act=cancelexp]');if(c)c.disabled=true;nat('clearTemp').catch(()=>{})}}
+async function startExport(){if(tlDur<=0||exporting)return;if(npCanExport())return startExportNative();pause();ensureAudio();const mime=pickMime();if(!mime)return;
   const fps=projFps(),R=S.exportRes,W=LW>LH?Math.round(R*16/9):R,H=LW>LH?R:Math.round(R*16/9),cv=document.createElement('canvas');cv.width=W;cv.height=H;const ctx=cv.getContext('2d');
   recDest=actx.createMediaStreamDestination();master.connect(recDest);speaker.gain.value=0;
   const stream=new MediaStream([...cv.captureStream(fps).getVideoTracks(),...recDest.stream.getAudioTracks()]);
@@ -2055,7 +2098,7 @@ new ResizeObserver(()=>{fitTl()}).observe($('#tlwrap'));
 const NP={on:false,ready:false,sig:'',busy:false,chk:0,rect:''};
 function npEligible(){if(!NATIVE||exporting)return false;const ids=new Set(S.segments.map(g=>g.src));if(!ids.size)return false;
   for(const id of ids){const m=srcMeta(id);if(!m||!m.nat||!SRC[id])return false}return true}
-function npProject(){return{W:LW,H:LH,fps:projFps(),pieces:eff.map(p=>({name:srcMeta(p.src).nat,s:p.s,e:p.e,t:p.t})),
+function npProject(){return{W:LW,H:LH,dur:tlDur,fps:projFps(),pieces:eff.map(p=>({name:srcMeta(p.src).nat,s:p.s,e:p.e,t:p.t})),
   layout:{bg:S.layout.bg,bgDark:S.layout.bgDark,layers:S.layout.layers.map(L=>({on:L.on,crop:L.crop,w:L.w,cx:L.cx,cy:L.cy,radius:L.radius,border:L.border,bc:L.bc,fx:!!L.fx}))},
   adj:S.segments.filter(g=>adjOn(g.adj)).map(g=>Object.assign({t0:g._t,t1:g._t1},g.adj))}}
 function npBg(){if(!NP.on)return;const c=fsOn?'#000000':getComputedStyle(document.documentElement).getPropertyValue('--bg').trim();nat('setBackground',{color:c}).catch(()=>{})}
@@ -2073,7 +2116,7 @@ function natTick(){const now=performance.now();let t=PB.nt0+(now-PB.n0)/1000;
   if(t>=tlDur-1e-3){fireSfx(lastTl,tlDur);lastTl=tlDur;S.tl=tlDur;finishPlay();return}
   fireSfx(lastTl,t);lastTl=t;S.tl=t;dirty=true}
 function loop(){tick();if(NATIVE)npUpdate();if(pp.hold)dirty=true;
-  if(exporting){const x=exporting;drawFrame(x.ctx,x.W,x.H,S.tl,false);x.n++;if(x.n%5===0){drawFrame(pctx,pv.width,pv.height,S.tl,true);drawTl();$('#tcCur').textContent=fmt(S.tl);const b=$('#expBar');if(b)b.style.width=(S.tl/Math.max(.001,tlDur)*100).toFixed(1)+'%';const i=$('#expInfo');if(i)i.textContent=`書き出し中… ${fmt(S.tl)} / ${fmt(tlDur)}`}}
+  if(exporting&&!exporting.native){const x=exporting;drawFrame(x.ctx,x.W,x.H,S.tl,false);x.n++;if(x.n%5===0){drawFrame(pctx,pv.width,pv.height,S.tl,true);drawTl();$('#tcCur').textContent=fmt(S.tl);const b=$('#expBar');if(b)b.style.width=(S.tl/Math.max(.001,tlDur)*100).toFixed(1)+'%';const i=$('#expInfo');if(i)i.textContent=`書き出し中… ${fmt(S.tl)} / ${fmt(tlDur)}`}}
   else if(dirty){dirty=false;drawFrame(pctx,pv.width,pv.height,S.tl,true);drawTl();$('#tcCur').textContent=fmt(S.tl);if(fsOn)drawFs()}
   if(animTilesOn())drawAnimTiles();
   renderTools();requestAnimationFrame(loop)}
