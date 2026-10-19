@@ -755,9 +755,12 @@ async function makeVideoSourceNative(info,forceId){let v=newVideoEl();v.src=info
   try{await wait(v)}catch(e){ // 直接読めないときはメモリに読み込んで再生
     v.remove();status('動画を読み込み中…（メモリに展開）');const b=await (await fetch(info.url)).blob();v=newVideoEl();v.src=URL.createObjectURL(b);try{v.load()}catch(_){}
     try{await wait(v)}catch(e2){v.remove();throw new Error('動画を再生できませんでした')}}
-  const id=forceId||uid('v');SRC[id]={kind:'video',el:v,player:new VPlayer(v),get vw(){return v.videoWidth},get vh(){return v.videoHeight},peaks:null,rms:null,audioBuf:null,file:null,nat:info.name};
+  const id=forceId||uid('v');SRC[id]=makeVideoRT(v,{file:null,nat:info.name});
   v.addEventListener('seeked',req);v.addEventListener('loadeddata',req);hookAudio(id);
   return{id,kind:'video',name:info.displayName||info.name,dur:isFinite(v.duration)?v.duration:(info.duration||0),fileKey:'nat:'+info.name,nat:info.name,fps:info.fps?snapFps(info.fps):0}}
+// 1つの動画に再生用の要素を2つ用意し、カット点の先を裏で準備しておく（切り替え時に止まらないように）
+function makeVideoRT(v,extra){const v2=newVideoEl();v2.src=v.src;v2.preload='auto';try{v2.load()}catch(e){}v2.addEventListener('seeked',req);
+  return Object.assign({kind:'video',els:[v,v2],players:[new VPlayer(v),new VPlayer(v2)],act:0,get el(){return this.els[this.act]},get player(){return this.players[this.act]},get vw(){return v.videoWidth},get vh(){return v.videoHeight},peaks:null,rms:null,audioBuf:null},extra)}
 async function makeAnySource(f,forceId){return f&&f.__nat?makeVideoSourceNative(f,forceId):makeVideoSource(f,forceId)}
 async function pickNativeVideo(){const r=await nat('pickVideo');if(!r||r.cancelled)return null;r.__nat=true;return r}
 async function makeVideoSource(f,forceId){const v=newVideoEl();v.src=URL.createObjectURL(f);try{v.load()}catch(e){}
@@ -766,7 +769,7 @@ async function makeVideoSource(f,forceId){const v=newVideoEl();v.src=URL.createO
   if(!isFinite(v.duration)){ // 長さ情報のない動画（録画したwebm等）は末尾までシークして長さを確定させる
     await new Promise(res=>{const done=()=>{if(isFinite(v.duration)){v.removeEventListener('durationchange',done);v.removeEventListener('timeupdate',done);res()}};v.addEventListener('durationchange',done);v.addEventListener('timeupdate',done);v.currentTime=1e7;setTimeout(res,4000)});
     v.currentTime=0;if(!isFinite(v.duration))throw new Error('duration')}
-  const id=forceId||uid('v');SRC[id]={kind:'video',el:v,player:new VPlayer(v),get vw(){return v.videoWidth},get vh(){return v.videoHeight},peaks:null,rms:null,audioBuf:null,file:f};
+  const id=forceId||uid('v');SRC[id]=makeVideoRT(v,{file:f});
   v.addEventListener('seeked',req);v.addEventListener('loadeddata',req);hookAudio(id);
   return{id,kind:'video',name:f.name,dur:v.duration,fileKey:f.name+':'+f.size}}
 async function analyzeSource(id){const rt=SRC[id];if(rt&&rt.nat)return analyzeSourceNative(id);if(!rt||!rt.file||rt.analyzing)return;ensureAudio();rt.analyzing=true;
@@ -929,7 +932,7 @@ async function decodeAdts(file,au,dur,prog){if(!au.codec.startsWith('mp4a')||!au
 
 /* ================= 音声 ================= */
 let actx=null,master,speaker,origG,sfxG,bgmG,recDest=null,bgmNode=null;
-function hookAudio(id){const rt=SRC[id];if(!actx||!rt||rt.kind!=='video'||rt.node)return;try{rt.node=actx.createMediaElementSource(rt.el);rt.node.connect(origG)}catch(e){}}
+function hookAudio(id){const rt=SRC[id];if(!actx||!rt||rt.kind!=='video')return;for(const el of rt.els||[rt.el]){if(el._node)continue;try{el._node=actx.createMediaElementSource(el);el._node.connect(origG)}catch(e){}}}
 function ensureAudio(){
   if(!actx){const AC=window.AudioContext||window.webkitAudioContext;actx=new AC();master=actx.createGain();speaker=actx.createGain();master.connect(speaker);speaker.connect(actx.destination);
     origG=actx.createGain();sfxG=actx.createGain();bgmG=actx.createGain();origG.connect(master);sfxG.connect(master);bgmG.connect(master);applyVol();buildSfx()}
@@ -987,7 +990,7 @@ function stopBgm(){if(bgmNode){try{bgmNode.stop()}catch(e){}bgmNode=null}}
 /* ================= 再生エンジン（複数の動画・画像・空白をつなげて再生） ================= */
 const PB={p:null,mode:null,t0:0,n0:0,end:0,wait:false};
 const playerOf=src=>SRC[src]&&SRC[src].player;
-function pauseAll(except){for(const k in SRC){const pl=SRC[k].player;if(pl&&pl!==except&&!pl.paused)pl.pause()}}
+function pauseAll(except){for(const k in SRC){const r=SRC[k];for(const pl of r.players||[r.player]){if(pl&&pl!==except&&!pl.paused)pl.pause()}}}
 // 目標位置に本当に着くまで待つ（iPhoneは連続シークを取りこぼすことがあるため確認して再試行）
 function seekPlayer(pl,x){return new Promise(r=>{if(!(pl instanceof VPlayer)){pl.currentTime=x;return r()}const el=pl.el;let done=false,tries=0;
   const near=()=>!el.seeking&&!pl.pending&&Math.abs(el.currentTime-x)<.12;
@@ -996,10 +999,15 @@ function seekPlayer(pl,x){return new Promise(r=>{if(!(pl instanceof VPlayer)){pl
   el.addEventListener('seeked',chk);let to=setTimeout(function w(){if(near()||tries>=3)fin();else{tries++;pl.currentTime=x;to=setTimeout(w,1200)}},1200);
   pl.currentTime=x;if(near())setTimeout(chk,0)})}
 let lastTl=0;
+function prepareNext(p){const i=eff.indexOf(p),nx=eff[i+1];if(!nx)return;const r=SRC[nx.src];if(!r||!r.players)return;
+  if(nx.src===p.src){if(Math.abs(nx.t-(p.t+plen(p)))<1e-3&&Math.abs(nx.s-p.e)<.03)return;const alt=r.players[1-r.act];if(!alt.paused)alt.pause();alt.currentTime=nx.s;alt.prep=nx.s}
+  else if(r.player.paused){r.player.currentTime=nx.s;r.player.prep=nx.s}}
 async function enterAt(t,force){const p=pieceAt(t);PB.p=p;
+  if(p&&SRC[p.src]&&SRC[p.src].players){const r=SRC[p.src],alt=r.players[1-r.act],x0=p.s+(t-p.t);
+    if(alt.prep!=null&&Math.abs(alt.prep-x0)<.1&&!alt.el.seeking&&alt.el.readyState>=2){const cur=r.player;r.act=1-r.act;alt.prep=null;if(!cur.paused)cur.pause()}}
   if(p&&playerOf(p.src)){const pl=playerOf(p.src);pauseAll(pl);PB.mode='media';const x=p.s+(t-p.t);PB.chk={x,t,n:performance.now(),k:0};
     if(force||pl.pending||(pl.el&&pl.el.seeking)||Math.abs(pl.currentTime-x)>.06){PB.wait=true;if(exporting)await expPause();await seekPlayer(pl,x);if(exporting)await expResume();PB.wait=false}
-    if(!S.playing)return;try{await pl.play()}catch(e){}}
+    if(!S.playing)return;try{await pl.play()}catch(e){}pl.prep=null;prepareNext(p)}
   else{pauseAll(null);PB.mode='clock';PB.t0=t;PB.n0=performance.now();const nx=eff.find(q=>q.t>t+1e-6);PB.end=p?p.t+plen(p):(nx?nx.t:tlDur)}}
 function fireSfx(a,b){if(b-a>.6||b<a)return;for(const x of S.sfx){if(x.t>a&&x.t<=b)playBuf(sfxById(x.snd)?.buf,0,x.vol)}}
 function tick(){if(!S.playing||PB.wait)return;let t;
@@ -1233,7 +1241,7 @@ function clipAt(row,x,w){if(!row)return null;const list=clipsOf(row);
 function prepDrag(h){const it=selItem({kind:h.kind,id:h.id});tp.t0=h.t0;tp.t1=h.t1;tp.kind=h.kind;
   if(h.kind==='seg'){tp.A=captureAnchors();tp.orig={gap:it.gap||0,s:it.s,e:it.e,_t:it._t,_t1:it._t1,prevEnd:it._t-(it.gap||0),dur:(srcMeta(it.src)?.kind==='image'?3600:srcMeta(it.src)?.dur)||it.e}}
   else if(h.kind==='cap')tp.orig={src:it.src,s:it.s,e:it.e};
-  else if(h.kind==='ov')tp.orig={t:it.t,d:it.d};
+  else if(h.kind==='ov'){tp.orig={t:it.t,d:it.d};tp.ovOrig=new Map(S.overlays.map(o=>[o,o.t]))}
   else if(h.kind==='sfx')tp.orig={t:it.t};
   else if(h.kind==='bgm')tp.orig=clone(S.bgmClip);
   const T=[S.tl,0,tlDur];for(const p of eff)T.push(p.t,p.t+plen(p));
@@ -1271,18 +1279,24 @@ tlc.addEventListener('pointermove',e=>{if(!tp.ptr.has(e.pointerId))return;tp.ptr
     if(tp.mode==='move'){const len=tp.t1-tp.t0;let nt=clamp(tp.t0+dt,0,Math.max(0,tlDur-.05));nt+=snapT([nt,nt+len]);nt=Math.max(0,nt);
       if(k==='sfx')it.t=nt;
       else if(k==='bgm')S.bgmClip.t=nt;
-      else if(k==='ov'){it.t=nt;const row=rowAt(y);if(row&&row.k==='ov')it.track=row.n;else if(row&&row.k==='cap')it.track=ROWS.find(r=>r.k==='ov').n}
+      else if(k==='ov'){it.t=nt;const row=rowAt(y);if(row&&row.k==='ov')it.track=row.n;else if(row&&row.k==='cap')it.track=ROWS.find(r=>r.k==='ov').n;pushOv(it,'move')}
       else if(k==='cap'){let sa=srcAt(nt);if(!sa){const nx=eff.find(p=>p.t>nt);if(nx)sa={src:nx.src,x:nx.s}}if(sa){const L=o.e-o.s;it.src=sa.src;it.s=sa.x;it.e=sa.x+L}}}
     else if(tp.mode==='trimL'){let nt=clamp(tp.t0+dt,0,tp.t1-.1);nt=Math.min(nt+snapT([nt]),tp.t1-.1);
       if(k==='bgm'){const end=o.t+(o.len??Math.max(.5,tlDur-o.t));S.bgmClip.t=nt;S.bgmClip.offset=Math.max(0,(o.offset||0)+(nt-o.t));S.bgmClip.len=Math.max(.3,end-nt)}
-      else if(k==='ov'){const end=o.t+o.d;const lim=Math.max(0,...S.overlays.filter(x=>x!==it&&x.track===it.track&&x.t+x.d<=end-1e-3).map(x=>x.t+x.d));nt=Math.max(nt,lim);it.t=nt;it.d=Math.max(.1,end-nt)}
+      else if(k==='ov'){const end=o.t+o.d;it.t=nt;it.d=Math.max(.1,end-nt);pushOv(it,'L')}
       else if(k==='cap'){const sa=srcAt(nt);if(sa&&sa.src===it.src)it.s=Math.min(sa.x,it.e-.1)}}
     else{let nt=clamp(tp.t1+dt,tp.t0+.1,Math.max(tlDur,tp.t1+dt));nt=Math.max(nt+snapT([nt]),tp.t0+.1);
       if(k==='bgm')S.bgmClip.len=Math.max(.3,nt-S.bgmClip.t);
-      else if(k==='ov'){const nx=S.overlays.filter(x=>x!==it&&x.track===it.track&&x.t>=it.t+1e-3).map(x=>x.t);if(nx.length)nt=Math.min(nt,Math.min(...nx));it.d=Math.max(.1,nt-it.t)}
+      else if(k==='ov'){it.d=Math.max(.1,nt-it.t);pushOv(it,'R')}
       else if(k==='cap'){const sa=srcAt(Math.max(0,nt-1e-3));if(sa&&sa.src===it.src)it.e=Math.max(sa.x+1e-3,it.s+.1)}}
     if(k==='cap')S.captions.sort((a,b)=>a.s-b.s);
     req()}});
+// 同じトラックのテロップにぶつかったら、押して一緒に動かす（重ならない・止まらない）
+function pushOv(it,mode){const M=tp.ovOrig;if(!M)return;for(const [o,t] of M)if(o!==it)o.t=t;
+  const oc=tp.orig.t+tp.orig.d/2,same=S.overlays.filter(o=>o!==it&&o.track===it.track);
+  if(mode!=='R'){const left=same.filter(o=>M.get(o)+o.d/2<=oc).sort((a,b)=>b.t-a.t);let lim=it.t;for(const o of left){if(o.t+o.d>lim)o.t=lim-o.d;lim=o.t}
+    if(lim<0){const over=-lim;for(const o of left)o.t+=over;if(mode==='L'){it.t+=over;it.d=Math.max(.1,it.d-over)}else it.t+=over}}
+  if(mode!=='L'){const right=same.filter(o=>M.get(o)+o.d/2>oc).sort((a,b)=>a.t-b.t);let lim=it.t+it.d;for(const o of right){if(o.t<lim)o.t=lim;lim=o.t+o.d}}}
 // 同じトラックで重なった部分は、動かしたクリップで上書き（Premiereの上書きと同じ。二重表示を防ぐ）
 function overwriteOv(it){const a=it.t,b=it.t+it.d;let hit=false;
   for(const x of S.overlays.slice()){if(x===it||x.track!==it.track)continue;const xa=x.t,xb=x.t+x.d;if(xb<=a+1e-3||xa>=b-1e-3)continue;hit=true;
