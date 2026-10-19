@@ -178,7 +178,8 @@ public class PurinNativePlugin: CAPPlugin, CAPBridgedPlugin, PHPickerViewControl
         guard let name = call.getString("name") else { call.reject("name がありません"); return }
         let u = mediaURL(name)
         if !FileManager.default.fileExists(atPath: u.path) { call.reject("動画ファイルが見つかりません"); return }
-        call.resolve(["url": webURL(u)])
+        let size = (try? FileManager.default.attributesOfItem(atPath: u.path)[.size] as? NSNumber)?.doubleValue ?? 0
+        call.resolve(["url": webURL(u), "size": size])
     }
 
     @objc func deleteMedia(_ call: CAPPluginCall) {
@@ -190,6 +191,7 @@ public class PurinNativePlugin: CAPPlugin, CAPBridgedPlugin, PHPickerViewControl
     @objc func analyzeAudio(_ call: CAPPluginCall) {
         guard let name = call.getString("name") else { call.reject("name がありません"); return }
         let src = mediaURL(name)
+        let rate = max(8000, min(48000, call.getInt("rate") ?? 16000))
         DispatchQueue.global(qos: .userInitiated).async {
             let asset = AVURLAsset(url: src)
             let track = asset.tracks(withMediaType: .audio).first
@@ -199,7 +201,7 @@ public class PurinNativePlugin: CAPPlugin, CAPBridgedPlugin, PHPickerViewControl
                 let reader = try AVAssetReader(asset: asset)
                 let settings: [String: Any] = [
                     AVFormatIDKey: kAudioFormatLinearPCM,
-                    AVSampleRateKey: 16000,
+                    AVSampleRateKey: rate,
                     AVNumberOfChannelsKey: 1,
                     AVLinearPCMBitDepthKey: 32,
                     AVLinearPCMIsFloatKey: true,
@@ -209,7 +211,7 @@ public class PurinNativePlugin: CAPPlugin, CAPBridgedPlugin, PHPickerViewControl
                 let out = AVAssetReaderAudioMixOutput(audioTracks: [at], audioSettings: settings)
                 out.alwaysCopiesSampleData = false
                 reader.add(out)
-                let dest = self.tmpDir().appendingPathComponent(name + ".f32")
+                let dest = self.tmpDir().appendingPathComponent(name + ".\(rate).f32")
                 FileManager.default.createFile(atPath: dest.path, contents: nil)
                 let fh = try FileHandle(forWritingTo: dest)
                 defer { try? fh.close() }
@@ -231,7 +233,7 @@ public class PurinNativePlugin: CAPPlugin, CAPBridgedPlugin, PHPickerViewControl
                     }
                 }
                 if reader.status == .failed { throw reader.error ?? NSError(domain: "purin", code: 2) }
-                call.resolve(["url": self.webURL(dest), "sampleRate": 16000, "samples": total / 4, "fps": fps])
+                call.resolve(["url": self.webURL(dest), "sampleRate": rate, "samples": total / 4, "fps": fps])
             } catch {
                 call.reject("音声を取り出せませんでした: \(error.localizedDescription)")
             }
