@@ -138,6 +138,7 @@ input[type=range]{width:100%;accent-color:var(--cyan);min-width:0}
 .gbar{height:14px;border-radius:7px;margin-top:10px;box-shadow:inset 0 0 0 1px rgba(0,0,0,.2)}
 .dotc{display:inline-block;width:12px;height:12px;border-radius:50%;margin-right:6px;vertical-align:-1px;box-shadow:inset 0 0 0 1px rgba(0,0,0,.25)}
 .tplb{padding:8px;text-align:left;font:inherit;color:var(--fg)}
+.tplb.on{outline:3px solid var(--accent);outline-offset:-1px}
 .tplb .n{font-size:12px;font-weight:800}
 .sec{border-top:1px solid var(--line);margin-top:8px}
 .sech{display:flex;align-items:center;gap:6px;min-height:38px}
@@ -685,6 +686,10 @@ function itemVisual(o){if(o.type==='img'){const a=imgCanvas(o);return a?{cv:a.cv
 /* ================= フレーム描画 ================= */
 const tiny=document.createElement('canvas');tiny.width=36;tiny.height=64;const tctx=tiny.getContext('2d');
 let boxes=[],guides={xs:[],ys:[]};
+/* 字幕のまとめて変更：OKを押すまでは見た目だけ変えて確認できる */
+function bulkStyle(base){const b=S.ui.bulk;let st=b.tpl?normStyle(clone((allTpl().find(t=>t.id===b.tpl)||{}).style||base)):clone(base);st.x=b.x;st.y=b.y;st.align=b.align;setFontSize(st,b.size);return st}
+const BKC=new WeakMap();
+function bulkView(c){const b=S.ui&&S.ui.bulk;if(!b||!b.dirty||S.panel!=='cap')return c.style;const key=JSON.stringify(b),h=BKC.get(c);if(h&&h.key===key&&h.src===c.style)return h.st;const st=bulkStyle(c.style);BKC.set(c,{key,src:c.style,st});return st}
 function drawFrame(ctx,W,H,tl,preview,ovOnly){
   const rs=W/LW;ctx.setTransform(rs,0,0,rs,0,0);ctx.globalAlpha=1;ctx.filter='none';
   // アプリ版：映像はネイティブのプレーヤーが後ろに描くので、ここでは文字や画像だけを描く
@@ -718,7 +723,7 @@ function drawFrame(ctx,W,H,tl,preview,ovOnly){
   }
   const ovs=S.overlays.filter(o=>tl>=o.t&&tl<o.t+o.d).sort((a,b)=>(a.track||2)-(b.track||2));
   for(const o of ovs){const v=itemVisual(o);if(!v)continue;drawItem(ctx,v.cv,v.k,o.style,evalAnim(o.style.anims,tl-o.t,o.d),rs,tl-o.t,preview&&{kind:'ov',id:o.id})}
-  if(sa)for(const c of S.captions){if(c.src!==sa.src||sa.x<c.s||sa.x>=c.e)continue;const cv=textCanvas(c.text,c.style);drawItem(ctx,cv,cv._k||1,c.style,evalAnim(c.style.anims,sa.x-c.s,c.e-c.s),rs,sa.x-c.s,preview&&{kind:'cap',id:c.id})}
+  if(sa)for(const c of S.captions){if(c.src!==sa.src||sa.x<c.s||sa.x>=c.e)continue;const st=bulkView(c);const cv=textCanvas(c.text,st);drawItem(ctx,cv,cv._k||1,st,evalAnim(st.anims,sa.x-c.s,c.e-c.s),rs,sa.x-c.s,preview&&{kind:'cap',id:c.id})}
   if(preview){
     if(guides.xs.length||guides.ys.length){ctx.save();ctx.strokeStyle='#ff4fd8';ctx.lineWidth=3;ctx.setLineDash([18,12]);ctx.beginPath();for(const x of guides.xs){ctx.moveTo(x,0);ctx.lineTo(x,LH)}for(const y of guides.ys){ctx.moveTo(0,y);ctx.lineTo(LW,y)}ctx.stroke();ctx.restore()}
     if(pp.hold){const pr=clamp((performance.now()-pp.hold.t0)/HOLD_MS,0,1);ctx.save();ctx.lineWidth=20;ctx.strokeStyle='rgba(0,0,0,.55)';ctx.beginPath();ctx.arc(pp.hold.x,pp.hold.y,78,0,7);ctx.stroke();ctx.lineWidth=11;ctx.strokeStyle='#ffffff';ctx.lineCap='round';ctx.beginPath();ctx.arc(pp.hold.x,pp.hold.y,78,-Math.PI/2,-Math.PI/2+pr*Math.PI*2);ctx.stroke();ctx.restore()}
@@ -1543,7 +1548,7 @@ async function transcribe(){
 /* ================= パネル（下から出るシート） ================= */
 const PANELS={voice:{mode:'dock'},adj:{mode:'dock'},cut:{mode:'dock'},sil:{mode:'dock'},bgm:{mode:'dock'},cap:{mode:'full'},edit:{mode:'full'},img:{mode:'full'},sfx:{mode:'full'},layout:{mode:'full'},tpl:{mode:'full'},exp:{mode:'full'}};
 const sheet=$('#sheet');
-function openPanel(k,keep){if(k&&!PANELS[k])return;const prev=S.panel;S.panel=k;$('#addMenu').hidden=true;S.ui.cpath=null;cpop.hidden=true;
+function openPanel(k,keep){if(k&&!PANELS[k])return;const prev=S.panel;S.panel=k;if(k==='cap'&&prev!=='cap')bulkInit();$('#addMenu').hidden=true;S.ui.cpath=null;cpop.hidden=true;
   if(k==='sil')silPreview=detectSilence();
   if(!prev)S.ui.fullAuto=true;
   if(k==='edit'&&prev!=='edit'){const it=selItem();S.ui.applyAll=!(it&&S.sel.kind==='cap')?true:false}
@@ -1622,6 +1627,19 @@ function animSub(s){const cat=S.ui.acat;const cur=s.anims.find(n=>catOf(n)===cat
   <div class="agrid"><button class="at ${cur?'':'on'}" data-anim="" data-cat="${cat}"><span class="tile">${SVG(ICONS.none)}</span><span>なし</span></button>${ANIM_CATS[cat].filter(animOk).map(n=>`<button class="at ${cur===n?'on':''}" data-anim="${esc(n)}" data-cat="${cat}"><span class="tile"><canvas data-amini="${esc(n)}"></canvas></span><span>${esc(animLabel(n))}</span></button>`).join('')}</div>
   <p class="hint">アオトアニメーション（Premiereのプリセット）のキーフレームを再現しています。イン・アウト・ループを1つずつ組み合わせられます。</p>`}
 function fontSub(s){return `<div class="fgrid">${FONTS.map(f=>`<button class="ft ${f.fam===s.font?'on':''}" data-font="${esc(f.fam)}" style="font-family:'${f.fam}'${f.fam==='Hiragino Sans'?",'Hiragino Kaku Gothic ProN'":''},'M PLUS 1p',sans-serif;font-weight:${f.w}">あア亜Aa<small>${esc(f.label)}${f.slot&&!loadedSlots.has(f.fam)?'・要追加':''}</small></button>`).join('')}${[...customFonts].filter(f=>!FONTS.some(x=>x.fam===f)).map(f=>`<button class="ft ${f===s.font?'on':''}" data-font="${esc(f)}" style="font-family:'${f}'">あア亜Aa<small>${esc(f)}</small></button>`).join('')}<button class="ft" data-act="addFont" style="font-size:14px">＋<small>フォントファイルを追加</small></button></div>`}
+function bulkInit(){const base=(S.captions[0]||{}).style||S.capStyle;S.ui.bulk={x:base.x??.5,y:base.y??.78,align:base.align||'center',size:Math.round(base.size||78),tpl:null,dirty:false}}
+function bulkSec(){if(!S.ui.bulk)bulkInit();const b=S.ui.bulk,cat=S.ui.tcat||'通常',cats=[...TPL_CATS,'マイ'],user=LS.get('kiri.tpl',[]);
+  const list=cat==='マイ'?user:BUILTIN_TPL.filter(t=>t.cat===cat);
+  return `<div class="sheet-h4">まとめて変更 <span class="badge">${S.captions.length}個の字幕</span></div>
+   <div class="row"><label>揃え</label><span class="seg">${[['left','左揃え'],['center','中央揃え'],['right','右揃え']].map(([v,l])=>`<button data-act="bkalign" data-v="${v}" class="${b.align===v?'on':''}">${l}</button>`).join('')}</span></div>
+   <div class="row"><label>縦の位置</label><span class="seg">${[[.16,'上'],[.5,'中央'],[.78,'下']].map(([v,l])=>`<button data-act="bkpos" data-v="${v}" class="${Math.abs(b.y-v)<.01?'on':''}">${l}</button>`).join('')}</span><button data-act="bkcenter">横を中央に</button></div>
+   ${rng('横の位置','bulk.x',0,100,1,Math.round(b.x*100),'%')}${rng('縦の位置','bulk.y',0,100,1,Math.round(b.y*100),'%')}
+   ${rng('文字サイズ','bulk.size',20,300,1,b.size)}
+   <div class="row"><label>テンプレート</label><span class="badge">${b.tpl?esc((allTpl().find(t=>t.id===b.tpl)||{}).name||''):'今のまま'}</span>${b.tpl?'<button data-act="bktpl" data-v="">選択を外す</button>':''}</div>
+   <nav class="subtabs">${cats.map(c=>`<button data-tcat="${c}" class="${c===cat?'on':''}">${c}</button>`).join('')}</nav>
+   <div class="tpls">${list.map(t=>`<button class="tpl tplb ${b.tpl===t.id?'on':''}" data-act="bktpl" data-v="${t.id}"><canvas data-tplc="${t.id}"></canvas><span class="n">${esc(t.name)}</span></button>`).join('')||'<p class="hint">まだありません</p>'}</div>
+   <div class="row"><button class="pri" data-act="bkok" ${S.captions.length?'':'disabled'}>OK（全部の字幕に反映）</button><button data-act="bkreset">元に戻す</button></div>
+   <p class="hint">変更は動画の上ですぐ確認できます。OKを押すと全部の字幕に反映されます。</p>`}
 function tplSub(){const user=LS.get('kiri.tpl',[]);const cat=S.ui.tcat||'通常';const cats=[...TPL_CATS,'マイ'];const list=cat==='マイ'?user:BUILTIN_TPL.filter(t=>t.cat===cat);
   return `<nav class="subtabs">${cats.map(c=>`<button data-tcat="${c}" class="${c===cat?'on':''}">${c}</button>`).join('')}</nav><div class="tpls">${list.map(t=>`<button class="tpl tplb" data-act="tplOne" data-v="${t.id}"><canvas data-tplc="${t.id}"></canvas><span class="n">${esc(t.name)}</span></button>`).join('')||'<p class="hint">まだありません。下から今のスタイルを保存できます。</p>'}</div>
   <div class="row"><input type="text" id="tplName" placeholder="テンプレ名" style="flex:1"><button class="pri" data-act="tplsave">今のスタイルを保存</button></div>`}
@@ -1729,6 +1747,7 @@ function renderPanel(fresh){const k=S.panel;if(!k)return;const keep=!fresh&&shee
      <label>区切り方</label><span class="seg"><button data-act="smode" data-v="bunsetsu" class="${S.split.mode==='bunsetsu'?'on':''}">文節</button><button data-act="smode" data-v="chars" class="${S.split.mode==='chars'?'on':''}">文字数</button></span>
      <button data-act="rebuild" ${S.chars.length?'':'disabled'}>字幕を作り直す</button></div>
      <div class="sheet-h4">誤字をまとめて修正</div><div class="row"><input type="text" id="rpA" placeholder="誤" style="flex:1"><span>→</span><input type="text" id="rpB" placeholder="正" style="flex:1"><button data-act="replace">全置換</button></div>
+     ${bulkSec()}
      <div class="sheet-h4">字幕一覧</div><div class="list">${list.map(x=>`<div class="li ${c&&c.id===x.id?'on':''}" data-cap="${x.id}"><span class="t">${isFinite(capTl(x))?fmt(capTl(x)):'カット中'}</span><span class="x">${esc(x.text)}</span><button data-act="capedit" data-v="${x.id}">編集</button></div>`).join('')||'<p class="hint">まだありません</p>'}</div>`}
   if(k==='sfx'){const x=S.sel&&S.sel.kind==='sfx'?selItem():null,fav=LS.get('kiri.fav',[]).filter(id=>sfxById(id));const cat=S.sfxCat||'マイ効果音';const cats=['マイ効果音','お気に入り'];
     const list=cat==='お気に入り'?fav.map(sfxById).filter(Boolean):SFX.filter(s=>s.cat===cat);
@@ -1802,6 +1821,7 @@ sheet.addEventListener('input',e=>{const el=e.target;
   if(f==='applyAll'){S.ui.applyAll=val;return}
   if(f.startsWith('sil.')){S.sil[f.slice(4)]=val;silPreview=detectSilence();const tot=(silPreview||[]).reduce((a,r)=>a+r.b-r.a,0);const i=$('#silInfo');if(i)i.textContent=`${(silPreview||[]).length}か所・${tot.toFixed(1)}秒をカット`;const b=sheet.querySelector('[data-act=silapply]');if(b)b.disabled=!(silPreview||[]).length;req();return}
   if(f.startsWith('split.')){S.split[f.slice(6)]=val;return}
+  if(f.startsWith('bulk.')){const k=f.slice(5);S.ui.bulk[k]=k==='size'?+val:+val/100;S.ui.bulk.dirty=true;req();return}
   if(f.startsWith('audio.')){S.audio[f.slice(6)]=val;applyVol();autosave();return}
   if(f==='bgm.offset'){S.bgmClip.offset=val;return}
   if(f==='fillerOn'){pushUndo();structural(()=>{S.fillerOn=val});renderPanel();return}
@@ -1878,6 +1898,12 @@ sheet.addEventListener('click',async e=>{
     delStroke:()=>{pushUndo();for(const s of styleTargets())s.strokes&&s.strokes.splice(ix,1);S.ui.stroke=Math.max(0,ix-1);req();renderPanel()},
     addShadow:()=>{pushUndo();for(const s of styleTargets()){s.shadows=s.shadows||[];s.shadows.push(SH())}S.ui.shadow=styleTargets()[0].shadows.length-1;req();renderPanel()},
     delShadow:()=>{pushUndo();for(const s of styleTargets())s.shadows&&s.shadows.splice(ix,1);S.ui.shadow=Math.max(0,ix-1);req();renderPanel()},
+    bkalign:()=>{S.ui.bulk.align=v;S.ui.bulk.dirty=true;renderPanel();req()},
+    bkpos:()=>{S.ui.bulk.y=+v;S.ui.bulk.dirty=true;renderPanel();req()},
+    bkcenter:()=>{S.ui.bulk.x=.5;S.ui.bulk.dirty=true;renderPanel();req()},
+    bktpl:()=>{S.ui.bulk.tpl=v||null;S.ui.bulk.dirty=true;renderPanel();req()},
+    bkreset:()=>{bulkInit();renderPanel();req()},
+    bkok:()=>{if(!S.captions.length)return;pushUndo();for(const c of S.captions)c.style=bulkStyle(c.style);S.capStyle=bulkStyle(S.capStyle);const n=S.captions.length;bulkInit();req();autosave();renderPanel();toast(`${n}個の字幕を変更しました`)},
     tplOne:()=>{const t=allTpl().find(x=>x.id===v);if(!t)return;pushUndo();for(const s of styleTargets()){const keep={x:s.x,y:s.y,scale:s.scale,scaleW:s.scaleW,uni:s.uni,rot:s.rot},cur=s.size;Object.assign(s,normStyle(t.style),keep);if(cur)setFontSize(s,cur)}req();autosave();renderPanel()},
     scat:()=>{S.sfxCat=v;renderPanel()}, sprev:()=>{ensureAudio();playBuf(sfxById(v)?.buf)},
     sfav:()=>{const f=LS.get('kiri.fav',['pashi','pikon','dokan','do']);const i=f.indexOf(v);if(i<0)f.push(v);else f.splice(i,1);LS.set('kiri.fav',f);renderPanel()},
