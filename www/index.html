@@ -1492,9 +1492,23 @@ function computeFillers(){const out=[];const words=S.fillerWords.split(/[,、\s]
     while((m=re.exec(text))){const a=m.index,b=a+m[0].length;const prev=text[a-1];if(a>0&&prev&&!/[、。！？!?\s]/.test(prev)&&!/^(えー|えっと|えーと|えーっと|うーん|んー)/.test(m[0]))continue;out.push({src,a:ch[a].s-.02,b:ch[b-1].e+.03})}}
   return out}
 const PART=/^(は|が|を|に|へ|で|と|も|の|や|か|ね|よ|な|わ|さ|ぞ|ぜ|って|から|まで|より|けど|けれど|ので|のに|し|て|で|た|だ|です|ます|でしょ|でしょう|じゃん|ない|たい|って|ん|ー|、|。|！|？|!|\?)$/;
+const PTCL=/^(は|が|を|に|へ|で|と|も|の|よ|ね|か|さ|な|わ|ぞ|ぜ|けど|けれど|から|まで|より|ので|のに|し|って|てか|とか|なら|ても|でも|じゃん|よね|かな|けどね)$/;
+const isH=ch=>/[ぁ-ゖ]/.test(ch),isK=ch=>/[一-鿿々〆ヶァ-ヺA-Za-z0-9０-９Ａ-Ｚａ-ｚ]/.test(ch);
+// 文節の切れ目かどうか（前の語aと次の語b）
+function brk(a,b){const x=a[a.length-1],y=b[0];if(/[、。！？!?\s…]/.test(x))return true;if(/^[ゃゅょっぁぃぅぇぉーァィゥェォッャュョ、。！？!?…]/.test(y))return false;
+  if(isH(x)&&isK(y))return true;if(PTCL.test(a)&&!PART.test(b))return true;if(a.length>=2&&/[はがをにへもの]$/.test(a)&&b.length>=2&&!PART.test(b)&&!PTCL.test(b))return true;return false}
 function units(text){if(S.split.mode==='chars'||!window.Intl||!Intl.Segmenter)return[...text].map((c,i)=>({t:c,i}));
   const seg=new Intl.Segmenter('ja',{granularity:'word'});const u=[];for(const x of seg.segment(text))u.push({t:x.segment,i:x.index});
-  const out=[];for(const x of u){if(out.length&&(PART.test(x.t)||/^[ぁ-ゖー]{1,2}$/.test(x.t)&&/[ぁ-ゖ]$/.test(out[out.length-1].t)===false&&x.t.length===1)){out[out.length-1].t+=x.t}else out.push({t:x.t,i:x.i})}return out}
+  const out=[];let prev=null;for(const x of u){if(out.length&&!brk(prev,x.t))out[out.length-1].t+=x.t;else out.push({t:x.t,i:x.i});prev=x.t}return out}
+// 文節のまとまりを、行数以内でなるべく均等な長さの行に分ける
+function splitLines(us,maxL,n){const L=us.map(u=>u.t.length),N=L.length,pre=[0];for(const l of L)pre.push(pre[pre.length-1]+l);
+  if(pre[N]<=maxL||N<2||n<2)return[us.map(u=>u.t).join('')];
+  let best=null;for(let k=2;k<=Math.min(n,N);k++){
+    // dp[j][i]: 先頭i個をj行に分けたときの最大行長
+    const dp=[...Array(k+1)].map(()=>Array(N+1).fill(Infinity)),bk=[...Array(k+1)].map(()=>Array(N+1).fill(0));dp[0][0]=0;
+    for(let j=1;j<=k;j++)for(let i=1;i<=N;i++)for(let p=j-1;p<i;p++){const v=Math.max(dp[j-1][p],pre[i]-pre[p]);if(v<dp[j][i]){dp[j][i]=v;bk[j][i]=p}}
+    const m=dp[k][N];if(!best||m<best.m-1e-9)best={m,k,bk};if(m<=maxL)break}
+  const res=[];let i=N;for(let j=best.k;j>0;j--){const p=best.bk[j][i];res.unshift(us.slice(p,i).map(u=>u.t).join(''));i=p}return res}
 function buildCaptions(silent){
   const by={};for(const c of S.chars){if(/\s/.test(c.c))continue;if(S.fillerOn&&fillerRanges.some(f=>f.src===c.src&&c.s>=f.a-.01&&c.e<=f.b+.01))continue;(by[c.src]||(by[c.src]=[])).push(c)}
   if(!Object.keys(by).length){if(!silent)toast('文字起こしデータがありません');return}
@@ -1503,7 +1517,7 @@ function buildCaptions(silent){
     const mine=[];
     for(const b of blocks){const text=b.map(c=>c.c).join('');const us=units(text);let group=[],len=0;
       const flush=()=>{if(!group.length)return;const i0=group[0].i,last=group[group.length-1],i1=last.i+last.t.length-1;
-        let la=[''];for(const u of group){const L=la[la.length-1];if(L.length+u.t.length>maxL&&L.length>0&&la.length<lines)la.push(u.t);else la[la.length-1]+=u.t}
+        const la=splitLines(group,maxL,lines);
         const t=la.join('\n').replace(/[、。]$/,'').replace(/、(\n|$)/g,'$1');if(t.trim())mine.push({id:uid('c'),src,s:b[i0].s,e:b[Math.min(i1,b.length-1)].e+.15,text:t,style:clone(style)});group=[];len=0};
       for(const u of us){if(len+u.t.length>maxT&&group.length)flush();if(u.t.length>maxT){for(const piece of u.t.match(new RegExp('.{1,'+maxT+'}','gs'))){group.push({t:piece,i:u.i+u.t.indexOf(piece)});len+=piece.length;flush()}continue}group.push(u);len+=u.t.length}
       flush()}
@@ -1642,6 +1656,7 @@ function bulkSec(){if(!S.ui.bulk)bulkInit();const b=S.ui.bulk,cat=S.ui.tcat||'�
    <nav class="subtabs">${cats.map(c=>`<button data-tcat="${c}" class="${c===cat?'on':''}">${c}</button>`).join('')}</nav>
    <div class="tpls">${list.map(t=>`<button class="tpl tplb ${b.tpl===t.id?'on':''}" data-act="bktpl" data-v="${t.id}"><canvas data-tplc="${t.id}"></canvas><span class="n">${esc(t.name)}</span></button>`).join('')||'<p class="hint">まだありません</p>'}</div>
    <div class="row"><button class="pri" data-act="bkok" ${S.captions.length?'':'disabled'}>OK（全部の字幕に反映）</button><button data-act="bkreset">元に戻す</button></div>
+   <div class="row"><button data-act="bkwrap" ${S.captions.length?'':'disabled'}>改行を文節で整える</button></div>
    <p class="hint">変更は動画の上ですぐ確認できます。OKを押すと全部の字幕に反映されます。</p>`}
 function tplSub(){const user=LS.get('kiri.tpl',[]);const cat=S.ui.tcat||'通常';const cats=[...TPL_CATS,'マイ'];const list=cat==='マイ'?user:BUILTIN_TPL.filter(t=>t.cat===cat);
   return `<nav class="subtabs">${cats.map(c=>`<button data-tcat="${c}" class="${c===cat?'on':''}">${c}</button>`).join('')}</nav><div class="tpls">${list.map(t=>`<button class="tpl tplb" data-act="tplOne" data-v="${t.id}"><canvas data-tplc="${t.id}"></canvas><span class="n">${esc(t.name)}</span></button>`).join('')||'<p class="hint">まだありません。下から今のスタイルを保存できます。</p>'}</div>
@@ -1892,6 +1907,7 @@ sheet.addEventListener('click',async e=>{
     resetTf:()=>{pushUndo();for(const s of styleTargets()){s.scale=100;s.rot=0;s.op=100}req();renderPanel()},
     talign:()=>{pushUndo();applyStyle('align',v);renderPanel()},
     va:()=>{pushUndo();applyStyle('va',v);renderPanel()},
+    bkwrap:()=>{if(!S.captions.length)return;pushUndo();let n=0;for(const c of S.captions){const t=c.text.replace(/\n/g,'');const nt=splitLines(units(t),S.split.maxLine,S.split.lines).join('\n');if(nt!==c.text){c.text=nt;n++}}req();autosave();renderPanel();toast(`${n}個の字幕の改行を整えました`)},
     bkva:()=>{S.ui.bulk.va=v;S.ui.bulk.dirty=true;renderPanel();req()},
     gmode:()=>{pushUndo();for(const s of styleTargets()){s.grad=s.grad||{stops:[s.fill||'#ffffff','#ffd23f'],ang:0};s.grad.on=v==='1';if(v==='1'&&s.grad.stops[0]==='#ffffff'&&s.fill&&s.fill!=='#ffffff')s.grad.stops[0]=s.fill}req();autosave();renderPanel()},
     gstop:()=>{S.ui.gstop=ix;renderPanel()},
