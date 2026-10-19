@@ -11,9 +11,15 @@
   --bg:#fff8dc; --panel:#fff1bd; --panel2:#ffe792; --line:#f1d06a; --fg:#3a2a00; --mute:#8f7743;
   --accent:#ff8a00; --accent-ink:#ffffff; --blue:#e08600; --cyan:#ffbe0b; --ink:#3a2a00; --cut:#e8364f;
   --cap:#a774f0; --gfx:#e070d6; --vid:#f39a12; --vid-sel:#ffc25c; --img:#d9822b; --aud:#5fae3e; --aud-sel:#79c856; --wave:#e9ffd8; --wave-sel:#ffffff;
-  --se:#ff7a2f; --bgm:#3fb87a; --row:#fff6d2; --row-a:#fbf0c4; --hdr:#f39a12; --hdr-cap:#9a68e6; --hdr-off:#f6e5a8; --clip-ink:#ffffff; --handle:#e3c25a;
+  --se:#ff7a2f; --bgm:#3fb87a; --row:#fff6d2; --row-a:#fbf0c4; --hdr:#f39a12; --hdr-cap:#9a68e6; --hdr-off:#f6e5a8; --clip-ink:#ffffff; --handle:#e3c25a; --danger-line:#f2a3b0; --danger-fg:#c8213c;
   --ui:"M PLUS 1p",system-ui,-apple-system,"Hiragino Sans",sans-serif; --mark:"Dela Gothic One","M PLUS 1p",sans-serif; --num:ui-monospace,"SF Mono",Menlo,monospace;
 }
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){color-scheme:dark;--bg:#0c0b09; --panel:#171510; --panel2:#24211a; --line:#3a3527; --fg:#f6f0de; --mute:#a0977f;
+  --accent:#ffb000; --blue:#ffb000; --cyan:#ffc21a; --ink:#2a1e00; --row:#13120e; --row-a:#181611; --hdr-off:#2b281f; --handle:#4d4738;
+  --danger-line:#5a2433; --danger-fg:#ff9fb0; --wave:#d8ffc4;}}
+:root[data-theme="dark"]{color-scheme:dark;--bg:#0c0b09; --panel:#171510; --panel2:#24211a; --line:#3a3527; --fg:#f6f0de; --mute:#a0977f;
+  --accent:#ffb000; --blue:#ffb000; --cyan:#ffc21a; --ink:#2a1e00; --row:#13120e; --row-a:#181611; --hdr-off:#2b281f; --handle:#4d4738;
+  --danger-line:#5a2433; --danger-fg:#ff9fb0; --wave:#d8ffc4;}
 [hidden]{display:none!important}
 html,body{height:100%}
 body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--ui);overflow:hidden;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
@@ -21,7 +27,7 @@ body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--ui);overflo
 button{font:inherit;color:inherit;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:8px 12px;cursor:pointer;touch-action:manipulation}
 button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 button.pri{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:800}
-button.danger{border-color:#f2a3b0;color:#c8213c}
+button.danger{border-color:var(--danger-line);color:var(--danger-fg)}
 button:disabled{opacity:.4}
 .ico{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;display:block}
 header{flex:none;height:44px;display:flex;align-items:center;gap:8px}
@@ -56,7 +62,7 @@ header .badge{max-width:24vw;overflow:hidden;text-overflow:ellipsis;white-space:
 .tools::-webkit-scrollbar{display:none}
 .tools button{flex:0 0 60px;background:none;border:none;display:flex;flex-direction:column;align-items:center;gap:4px;padding:6px 0;font-size:10.5px;color:var(--fg);border-radius:10px}
 .tools button .ico{width:23px;height:23px}
-.tools button.danger{color:#d42a46}
+.tools button.danger{color:var(--danger-fg)}
 .tools .back{flex:0 0 40px;background:var(--panel2);height:52px;border-radius:10px;justify-content:center}
 .tools .lbl{flex:none;font-size:11px;color:var(--accent);padding:0 6px;max-width:26vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #sheet{flex:none;background:var(--panel);border:1px solid var(--line);border-bottom:none;border-radius:16px 16px 0 0;overflow:auto;-webkit-overflow-scrolling:touch;box-sizing:border-box;padding:0 12px calc(14px + env(safe-area-inset-bottom,0px));-webkit-user-select:text;user-select:text;position:relative}
@@ -239,6 +245,7 @@ input[type=checkbox]{width:18px;height:18px;accent-color:var(--cyan);margin:0}
 #vids video{width:2px;height:2px}
 .hidden-in{display:none}
 @media (prefers-reduced-motion:reduce){#toast{transition:none}}
+.themebtn{margin-left:auto;font-size:13px;padding:7px 12px;border-radius:999px;white-space:nowrap}
 /* アプリ版：ステータスバー・ホームバーを避ける */
 html.native{height:100%;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
 html.native #home,html.native #fs{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);box-sizing:border-box}
@@ -282,7 +289,7 @@ html.native #home,html.native #fs{padding-top:env(safe-area-inset-top,0px);paddi
   <nav class="tools" id="tools"></nav>
 </div>
 <div id="home" hidden><div class="home-in">
-  <div class="home-top"><div class="mark big">ぷりん<b>Cut</b></div><span class="hint" style="margin:0">切り抜き動画エディタ</span></div>
+  <div class="home-top"><div class="mark big">ぷりん<b>Cut</b></div><span class="hint" style="margin:0">切り抜き動画エディタ</span><button id="hTheme" class="themebtn" aria-label="画面の明るさを切り替え"></button></div>
   <button id="hNew" class="newbtn"><svg class="ico" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>新規作成</button>
   <div id="hAspect" hidden><div class="sheet-h4">画面サイズを選ぶ</div><div class="asp">
     <button data-asp="v"><i class="av"></i><b>縦 9:16</b><small>1080×1920・ショート/TikTok</small></button>
@@ -1938,7 +1945,14 @@ function lockZoom(){try{let m=document.querySelector('meta[name=viewport]');if(!
   m.setAttribute('content','width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover')}catch(e){}}
 lockZoom();document.addEventListener('focusout',()=>setTimeout(lockZoom,50));
 ['gesturestart','gesturechange'].forEach(ev=>document.addEventListener(ev,e=>e.preventDefault(),{passive:false}));
+// 画面の明るさ：自動（端末の設定に合わせる）／ライト／ダーク
+const THEMES=[['auto','自動'],['light','ライト'],['dark','ダーク']];
+function applyTheme(){const t=LS.get('kiri.theme','auto');if(t==='auto')delete document.documentElement.dataset.theme;else document.documentElement.dataset.theme=t;
+  const b=$('#hTheme');if(b)b.textContent='表示：'+THEMES.find(x=>x[0]===t)[1];toolsKey=null;renderTools();req();if(S.panel)renderPanel()}
+$('#hTheme').addEventListener('click',()=>{const t=LS.get('kiri.theme','auto'),i=THEMES.findIndex(x=>x[0]===t);LS.set('kiri.theme',THEMES[(i+1)%3][0]);applyTheme()});
+try{matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>{req()})}catch(e){}
 async function boot(){
+  applyTheme();
   setupDemo();
   for(const k of await IDB.keys()||[]){if(String(k).startsWith('font:')){const buf=await IDB.get(k);if(buf)await registerFont(String(k).slice(5),buf)}}
   layout();ensureV1Visible();loop();
