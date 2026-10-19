@@ -49,6 +49,7 @@ import Photos
 import PhotosUI
 import Speech
 import UniformTypeIdentifiers
+import FluidAudio
 
 /// 独自プラグインを登録するためのビューコントローラー（Main.storyboard から使う）
 class PurinBridgeViewController: CAPBridgeViewController {
@@ -91,9 +92,15 @@ public class PurinNativePlugin: CAPPlugin, CAPBridgedPlugin, PHPickerViewControl
         CAPPluginMethod(name: "clearTemp", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "audioFX", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "audioFXStatus", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "commitFile", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "commitFile", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "diarize", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "diarizeStatus", returnType: CAPPluginReturnPromise)
     ]
     var fxProgress: [String: Double] = [:]
+    var diarState: [String: [String: Any]] = [:]
+    let diarLock = NSLock()
+    var diarManager: OfflineDiarizerManager?
+    var diarManagerNum = -1
     let purinPlayer = PurinPlayer()
     let purinExporter = PurinExporter()
     func tmpFileURL(_ name: String) -> URL { tmpDir().appendingPathComponent((name as NSString).lastPathComponent) }
@@ -1032,5 +1039,84 @@ extension PurinNativePlugin {
         } catch {
             call.reject("保存できませんでした: \(error.localizedDescription)")
         }
+    }
+}
+
+
+// MARK: 話者の聞き分け（FluidAudio：pyannote + WeSpeaker をiPhone内で実行）
+extension PurinNativePlugin {
+    func setDiar(_ name: String, _ v: [String: Any]) { diarLock.lock(); diarState[name] = v; diarLock.unlock() }
+
+    /// 動画の音声を 16kHz・モノラルの数値列にする
+    static func readMono16k(_ url: URL) throws -> [Float] {
+        let asset = AVURLAsset(url: url)
+        guard let at = asset.tracks(withMediaType: .audio).first else {
+            throw NSError(domain: "purin", code: 10, userInfo: [NSLocalizedDescriptionKey: "この動画には音声がありません"])
+        }
+        let reader = try AVAssetReader(asset: asset)
+        let settings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: 16000, AVNumberOfChannelsKey: 1,
+            AVLinearPCMBitDepthKey: 32, AVLinearPCMIsFloatKey: true, AVLinearPCMIsBigEndianKey: false, AVLinearPCMIsNonInterleaved: false
+        ]
+        let out = AVAssetReaderAudioMixOutput(audioTracks: [at], audioSettings: settings)
+        out.alwaysCopiesSampleData = false
+        reader.add(out)
+        guard reader.startReading() else { throw reader.error ?? NSError(domain: "purin", code: 11) }
+        var samples: [Float] = []
+        while let sb = out.copyNextSampleBuffer() {
+            guard let bb = CMSampleBufferGetDataBuffer(sb) else { continue }
+            let len = CMBlockBufferGetDataLength(bb)
+            let n = len / 4
+            if n <= 0 { continue }
+            let start = samples.count
+            samples.append(contentsOf: repeatElement(0, count: n))
+            _ = samples.withUnsafeMutableBytes { raw in
+                CMBlockBufferCopyDataBytes(bb, atOffset: 0, dataLength: n * 4, destination: raw.baseAddress! + start * 4)
+            }
+        }
+        if reader.status == .failed { throw reader.error ?? NSError(domain: "purin", code: 12) }
+        return samples
+    }
+
+    @objc func diarize(_ call: CAPPluginCall) {
+        guard let name = call.getString("name") else { call.reject("name がありません"); return }
+        let num = call.getInt("num") ?? 0
+        let src = mediaURL(name)
+        setDiar(name, ["phase": "model", "progress": 0.0])
+        Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self = self else { return }
+            do {
+                var cfg = OfflineDiarizerConfig.default
+                cfg.embedding.batchSize = 8
+                if num > 0 { cfg.clustering.numSpeakers = num }
+                let mgr: OfflineDiarizerManager
+                if let m = self.diarManager, self.diarManagerNum == num { mgr = m } else {
+                    mgr = OfflineDiarizerManager(config: cfg)
+                    try await mgr.prepareModels()
+                    self.diarManager = mgr
+                    self.diarManagerNum = num
+                }
+                self.setDiar(name, ["phase": "audio", "progress": 0.0])
+                let samples = try PurinNativePlugin.readMono16k(src)
+                self.setDiar(name, ["phase": "run", "progress": 0.0])
+                let result = try await mgr.process(audio: samples) { done, total in
+                    let p = total > 0 ? Double(done) / Double(total) : 0
+                    self.setDiar(name, ["phase": p >= 1 ? "cluster" : "run", "progress": p])
+                }
+                let segs: [[String: Any]] = result.segments.map {
+                    ["s": Double($0.startTimeSeconds), "e": Double($0.endTimeSeconds), "spk": $0.speakerId]
+                }
+                self.setDiar(name, ["phase": "done", "progress": 1.0])
+                call.resolve(["segments": segs])
+            } catch {
+                self.setDiar(name, ["phase": "error", "progress": 0.0])
+                call.reject("話者を聞き分けられませんでした: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    @objc func diarizeStatus(_ call: CAPPluginCall) {
+        diarLock.lock(); let v = diarState[call.getString("name") ?? ""] ?? ["phase": "none", "progress": 0.0]; diarLock.unlock()
+        call.resolve(v)
     }
 }

@@ -31,7 +31,7 @@ jobs:
           cd ios/App
           xcodebuild -project App.xcodeproj -scheme App -configuration Release \
             -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" -skipPackagePluginValidation -skipMacroValidation \
             build 2>&1 | tee build.log | grep -E "error:|warning: unable|BUILD (SUCCEEDED|FAILED)" || true
           if [ ! -f build/Build/Products/Release-iphoneos/App.app/App ]; then grep -E "error:|warning: .*only available" build.log | head -80 > errors.txt; tail -150 build.log >> errors.txt; cat errors.txt; exit 1; fi
 

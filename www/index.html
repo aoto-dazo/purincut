@@ -209,6 +209,13 @@ input[type=checkbox]{width:18px;height:18px;accent-color:var(--cyan);margin:0}
 .li.on{border-color:var(--cap)}
 .li .t{font-family:var(--num);font-size:11px;color:var(--mute);font-variant-numeric:tabular-nums}
 .li .x{white-space:pre-wrap;word-break:break-all}
+.li .sd{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;vertical-align:middle}
+.spkrow{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:10px;background:var(--bg);margin:4px 0;font-size:13px}
+.spkrow .dot{width:14px;height:14px;border-radius:50%;flex:none}
+.spkrow .nm{flex:1;min-width:0}
+.spkrow.on{outline:2px solid var(--accent)}
+.pbar{height:6px;border-radius:3px;background:var(--row);overflow:hidden;margin:4px 0}.pbar i{display:block;height:100%;background:var(--accent);width:0}
+.spkchips{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 8px}.spkchips button{padding:4px 10px;font-size:12px;border-radius:14px}.spkchips button.on{color:#fff}
 .li button{padding:4px 8px;font-size:11px}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:6px;margin-top:6px}
 .snd{display:flex;align-items:center;border-radius:10px;overflow:hidden;border:1px solid var(--line);background:var(--panel2)}
@@ -518,7 +525,7 @@ function structural(fn){const A=captureAnchors();fn();recompute();restoreAnchors
 
 /* ================= 履歴・保存 ================= */
 const hist=[],fut=[];
-const snap=()=>JSON.stringify({sources:S.sources,segments:S.segments.map(g=>({id:g.id,src:g.src,s:g.s,e:g.e,gap:g.gap||0,adj:g.adj,zoom:g.zoom})),captions:S.captions,overlays:S.overlays.map(o=>Object.assign({},o,{img:undefined,_ac:undefined})),sfx:S.sfx,layout:S.layout,fillerOn:S.fillerOn,capStyle:S.capStyle,chars:S.chars,bgmClip:S.bgmClip});
+const snap=()=>JSON.stringify({sources:S.sources,segments:S.segments.map(g=>({id:g.id,src:g.src,s:g.s,e:g.e,gap:g.gap||0,adj:g.adj,zoom:g.zoom})),captions:S.captions,spk:S.spk||null,overlays:S.overlays.map(o=>Object.assign({},o,{img:undefined,_ac:undefined})),sfx:S.sfx,layout:S.layout,fillerOn:S.fillerOn,capStyle:S.capStyle,chars:S.chars,bgmClip:S.bgmClip});
 function pushUndo(){hist.push(snap());if(hist.length>60)hist.shift();fut.length=0;updUndo()}
 function restoreSnap(j){const o=JSON.parse(j);const imgs=Object.fromEntries(S.overlays.map(x=>[x.id,x.img]));Object.assign(S,o);S.overlays.forEach(x=>{x.img=imgs[x.id]||null;if(!x.img&&x.dataUrl)loadImg(x)});
   if(S.sel&&!selItem())S.sel=null;recompute();fitTl();renderPanel();renderTools()}
@@ -604,6 +611,8 @@ function applyShadows(body,sh,kpx=1){if(!sh.length)return body;
     x.shadowColor=hexA(s.c,s.a);x.shadowBlur=s.blur*(1-sp)/kpx;x.shadowOffsetX=OFF+Math.cos(r)*s.dist/kpx;x.shadowOffsetY=Math.sin(r)*s.dist/kpx;x.drawImage(src,-OFF,0)}
   x.shadowColor='transparent';x.drawImage(body,0,0);return c}
 const shPad=(sh,k=1)=>{let p=0;for(const s of sh)p=Math.max(p,(s.blur*1.6+s.dist+(s.size||0))/k);return p};
+const SPK_COL=['#ff4d5e','#2f8cff','#22b35e','#ff9d00','#a259ff','#ff5fc8','#14b8b8','#8a8f98'];
+const capById=id=>S.captions.find(c=>c.id===id);
 function textCanvas(text,s){
   const key=text+'|'+JSON.stringify([s.font,s.weight,s.size,s.track,s.lh,s.align,s.fillOn,s.fill,s.strokes,s.bgOn,s.bgc,s.bgA,s.bgR,s.shadows,s.glow,s.grad&&s.grad.on?s.grad:0]);
   let c=textCache.get(key);if(c)return c;
@@ -1316,6 +1325,7 @@ function drawTl(){
       continue}
     for(const c of clipsOf(row)){const sel=isSel(c),col=C(COLORS[c.kind]);let x0=X(c.t0),x1=Math.max(X(c.t1),x0+(c.minPx||3));if(x1<HDR||x0>w)continue;
       tx.fillStyle=sel?col:hexA(col,.42);rr(x0,y,Math.max(2,x1-x0-1),row.h,4);tx.fill();
+      if(c.kind==='cap'){const cp=capById(c.id);if(cp&&cp.spk!=null&&S.spk&&S.spk.n){tx.fillStyle=SPK_COL[cp.spk%SPK_COL.length];tx.fillRect(x0+2,y+row.h-4,Math.max(2,x1-x0-5),3)}}
       if(sel){tx.save();if(tp.lifted){tx.shadowColor='rgba(255,210,63,.9)';tx.shadowBlur=10}tx.strokeStyle=tp.lifted?C('--accent'):C('--fg');tx.lineWidth=tp.lifted?2.5:1.5;tx.stroke();tx.restore();if(c.kind!=='sfx'){tx.fillStyle=C('--fg');tx.fillRect(x0+1,y+3,3,row.h-6);tx.fillRect(x1-5,y+3,3,row.h-6)}}
       tx.save();tx.beginPath();tx.rect(x0+6,y,Math.max(0,x1-x0-12),row.h);tx.clip();tx.fillStyle=sel?'#fff':C('--fg');tx.font=(row.h<22?'10px ':'11px ')+C('--ui');tx.textBaseline='middle';
       tx.fillText(String(c.label||'').replace(/\n/g,' '),x0+7,y+row.h/2+1);tx.restore()}
@@ -1643,6 +1653,47 @@ function animSub(s){const cat=S.ui.acat;const cur=s.anims.find(n=>catOf(n)===cat
   <div class="agrid"><button class="at ${cur?'':'on'}" data-anim="" data-cat="${cat}"><span class="tile">${SVG(ICONS.none)}</span><span>なし</span></button>${ANIM_CATS[cat].filter(animOk).map(n=>`<button class="at ${cur===n?'on':''}" data-anim="${esc(n)}" data-cat="${cat}"><span class="tile"><canvas data-amini="${esc(n)}"></canvas></span><span>${esc(animLabel(n))}</span></button>`).join('')}</div>
   <p class="hint">アオトアニメーション（Premiereのプリセット）のキーフレームを再現しています。イン・アウト・ループを1つずつ組み合わせられます。</p>`}
 function fontSub(s){return `<div class="fgrid">${FONTS.map(f=>`<button class="ft ${f.fam===s.font?'on':''}" data-font="${esc(f.fam)}" style="font-family:'${f.fam}'${f.fam==='Hiragino Sans'?",'Hiragino Kaku Gothic ProN'":''},'M PLUS 1p',sans-serif;font-weight:${f.w}">あア亜Aa<small>${esc(f.label)}${f.slot&&!loadedSlots.has(f.fam)?'・要追加':''}</small></button>`).join('')}${[...customFonts].filter(f=>!FONTS.some(x=>x.fam===f)).map(f=>`<button class="ft ${f===s.font?'on':''}" data-font="${esc(f)}" style="font-family:'${f}'">あア亜Aa<small>${esc(f)}</small></button>`).join('')}<button class="ft" data-act="addFont" style="font-size:14px">＋<small>フォントファイルを追加</small></button></div>`}
+/* --- 話者ごとに分ける（iPhone内のAIで声を聞き分ける） --- */
+const DIA={busy:false,msg:'',pct:0};
+function spkCfg(){return S.spk||(S.spk={num:0,n:0,tpl:{},names:{}})}
+function spkName(i){const c=spkCfg();return(c.names&&c.names[i])||`話者${i+1}`}
+function spkSec(){const cfg=spkCfg(),pick=S.ui.spkPick;
+  let h=`<div class="sheet-h4">話者ごとに分ける</div>`;
+  if(!NATIVE)return h+`<p class="hint">声で話者を聞き分ける機能はアプリ版で使えます。</p>`;
+  h+=`<div class="row"><label>人数</label><span class="seg">${[[0,'自動'],[2,'2人'],[3,'3人'],[4,'4人'],[5,'5人'],[6,'6人']].map(([v,l])=>`<button data-act="spknum" data-v="${v}" class="${(cfg.num||0)===v?'on':''}">${l}</button>`).join('')}</span></div>
+   <div class="row"><button class="pri" data-act="dia" ${DIA.busy||!S.captions.length?'disabled':''}>声で話者を聞き分ける</button></div>
+   <div class="pbar"><i id="diaBar" style="width:${DIA.pct}%"></i></div><p class="hint" id="diaInfo">${esc(DIA.msg||(S.captions.length?'人数が分かっている場合は選ぶと正確になります。初回はAIモデルのダウンロード（通信あり）が必要です。':'先に字幕を作ってください。'))}</p>`;
+  if(cfg.n){const cnt=i=>S.captions.filter(c=>c.spk===i).length;
+    for(let i=0;i<cfg.n;i++){const t=cfg.tpl[i]&&allTpl().find(x=>x.id===cfg.tpl[i]);
+      h+=`<div class="spkrow ${pick===i?'on':''}"><span class="dot" style="background:${SPK_COL[i%SPK_COL.length]}"></span><span class="nm">${esc(spkName(i))} <span class="badge">${cnt(i)}個</span><br><span class="hint" style="margin:0">${t?'テンプレ：'+esc(t.name):'テンプレ未設定'}</span></span><button data-act="spkpick" data-v="${i}">${pick===i?'閉じる':'テンプレを選ぶ'}</button></div>`;
+      if(pick===i){const cat=S.ui.tcat||'通常',cats=[...TPL_CATS,'マイ'],user=LS.get('kiri.tpl',[]),list=cat==='マイ'?user:BUILTIN_TPL.filter(t=>t.cat===cat);
+        h+=`<nav class="subtabs">${cats.map(c=>`<button data-tcat="${c}" class="${c===cat?'on':''}">${c}</button>`).join('')}</nav><div class="tpls">${list.map(t=>`<button class="tpl tplb ${cfg.tpl[i]===t.id?'on':''}" data-act="spktpl" data-v="${t.id}"><canvas data-tplc="${t.id}"></canvas><span class="n">${esc(t.name)}</span></button>`).join('')||'<p class="hint">まだありません</p>'}</div>`}}
+    h+=`<div class="row"><button data-act="spkre">話者のテンプレを全部の字幕に反映し直す</button></div><p class="hint">字幕をタップして編集を開くと、話者を付け替えられます。</p>`}
+  return h}
+function tplKeep(s,t){const keep={x:s.x,y:s.y,scale:s.scale,scaleW:s.scaleW,uni:s.uni,rot:s.rot,va:s.va,align:s.align},cur=s.size;const o=Object.assign(clone(s),normStyle(clone(t.style)),keep);if(cur)setFontSize(o,cur);return o}
+function applySpk(c){const cfg=spkCfg();if(c.spk==null)return false;const id=cfg.tpl[c.spk];const t=id&&allTpl().find(x=>x.id===id);if(!t)return false;c.style=tplKeep(c.style,t);return true}
+async function runDiarize(){if(!NATIVE||DIA.busy)return;if(!S.captions.length){toast('先に字幕を作ってください');return}
+  const srcs=S.sources.filter(m=>m.nat&&S.captions.some(c=>c.src===m.id));if(!srcs.length){toast('動画の音声が見つかりません');return}
+  DIA.busy=true;const say=(m,p)=>{DIA.msg=m;if(p!=null)DIA.pct=p;const i=$('#diaInfo');if(i)i.textContent=m;const b=$('#diaBar');if(b)b.style.width=DIA.pct+'%'};
+  const cfg=spkCfg();renderPanel();
+  try{const res=[];
+    for(const [n,m] of srcs.entries()){const tag=srcs.length>1?`（${n+1}/${srcs.length}）`:'';say(`準備中…${tag}`,0);
+      const poll=setInterval(()=>{nat('diarizeStatus',{name:m.nat}).then(r=>{if(r.phase==='model')say(`AIモデルを準備中…${tag}（初回はダウンロードします）`,2);else if(r.phase==='audio')say(`音声を読み込み中…${tag}`,4);else if(r.phase==='run')say(`声を聞き分け中…${tag} ${Math.round(r.progress*100)}%`,5+r.progress*90);else if(r.phase==='cluster')say(`話者をまとめています…${tag}`,96)}).catch(()=>{})},500);
+      let r;try{r=await nat('diarize',{name:m.nat,num:cfg.num||0})}finally{clearInterval(poll)}
+      res.push([m,(r.segments||[]).slice().sort((a,b)=>a.s-b.s)])}
+    pushUndo();let maxN=0;
+    for(const [m,segs] of res){const ids=[];for(const g of segs)if(!ids.includes(g.spk))ids.push(g.spk);
+      // 話した量が多い順に話者1,2…
+      const amt={};for(const g of segs)amt[g.spk]=(amt[g.spk]||0)+(g.e-g.s);ids.sort((a,b)=>amt[b]-amt[a]);
+      for(const c of S.captions){if(c.src!==m.id)continue;const tot={};for(const g of segs){const o=Math.min(c.e,g.e)-Math.max(c.s,g.s);if(o>0)tot[g.spk]=(tot[g.spk]||0)+o}
+        let best=null,bv=0;for(const k in tot)if(tot[k]>bv){bv=tot[k];best=k}
+        if(best==null){let dm=1.5;for(const g of segs){const d=Math.max(g.s-c.e,c.s-g.e,0);if(d<dm){dm=d;best=g.spk}}}
+        c.spk=best==null?undefined:ids.indexOf(best)}
+      maxN=Math.max(maxN,ids.length)}
+    cfg.n=maxN;let k=0;for(const c of S.captions)if(applySpk(c))k++;
+    say(maxN?`${maxN}人の話者に分けました。話者ごとにテンプレを選んでください。`:'話し声が見つかりませんでした',100);autosave();req()}
+  catch(e){say('聞き分けできませんでした：'+(e&&e.message||e),0)}
+  finally{DIA.busy=false;renderPanel()}}
 function bulkInit(){const base=(S.captions[0]||{}).style||S.capStyle;S.ui.bulk={x:base.x??.5,y:base.y??.78,align:base.align||'center',va:base.va||'mid',size:Math.round(base.size||78),tpl:null,dirty:false}}
 function bulkSec(){if(!S.ui.bulk)bulkInit();const b=S.ui.bulk,cat=S.ui.tcat||'通常',cats=[...TPL_CATS,'マイ'],user=LS.get('kiri.tpl',[]);
   const list=cat==='マイ'?user:BUILTIN_TPL.filter(t=>t.cat===cat);
@@ -1685,6 +1736,7 @@ function appearance(s,kind){const text=kind==='text';let ap='';
   return sec('ap','アピアランス',ap)}
 function renderEdit(){const it=selItem();const isCap=S.sel&&S.sel.kind==='cap'&&it,isOv=S.sel&&S.sel.kind==='ov'&&it&&it.type==='text',bulk=!isCap&&!isOv;const s=editStyle();
   let h=`<div class="handle" data-handle></div><div class="te-top"><div class="te-in"><textarea id="teText" rows="${S.ui.expand?4:1}" placeholder="${bulk?'全字幕のスタイルを編集中':'テキストを入力'}" ${bulk?'disabled':''}>${esc(bulk?'':it.text)}</textarea><button data-act="teExpand" aria-label="入力欄を広げる">${SVG(ICONS.expand)}</button></div><button class="ok" data-act="close" aria-label="完了">${SVG(ICONS.check)}</button></div>`;
+  if(isCap&&S.spk&&S.spk.n)h+=`<div class="spkchips"><span class="badge">話者</span>${[...Array(S.spk.n).keys()].map(i=>`<button data-act="spkset" data-v="${i}" class="${it.spk===i?'on':''}" style="${it.spk===i?`background:${SPK_COL[i%SPK_COL.length]}`:`border-color:${SPK_COL[i%SPK_COL.length]}`}">${esc(spkName(i))}</button>`).join('')}</div>`;
   if(isCap)h+=`<label class="allsw"><input type="checkbox" data-f="applyAll" ${S.ui.applyAll?'checked':''}>すべての字幕に同じスタイルを適用</label>`;
   if(bulk)h+=`<p class="hint" style="margin:0 0 8px">字幕を選んでいないので、全字幕にまとめて反映されます。</p>`;
   const tabs=[['tpl','テンプレート'],['font','フォント'],['style','スタイル'],['anim','アニメーション'],['place','配置']];
@@ -1766,7 +1818,8 @@ function renderPanel(fresh){const k=S.panel;if(!k)return;const keep=!fresh&&shee
      <button data-act="rebuild" ${S.chars.length?'':'disabled'}>字幕を作り直す</button></div>
      <div class="sheet-h4">誤字をまとめて修正</div><div class="row"><input type="text" id="rpA" placeholder="誤" style="flex:1"><span>→</span><input type="text" id="rpB" placeholder="正" style="flex:1"><button data-act="replace">全置換</button></div>
      ${bulkSec()}
-     <div class="sheet-h4">字幕一覧</div><div class="list">${list.map(x=>`<div class="li ${c&&c.id===x.id?'on':''}" data-cap="${x.id}"><span class="t">${isFinite(capTl(x))?fmt(capTl(x)):'カット中'}</span><span class="x">${esc(x.text)}</span><button data-act="capedit" data-v="${x.id}">編集</button></div>`).join('')||'<p class="hint">まだありません</p>'}</div>`}
+     ${spkSec()}
+     <div class="sheet-h4">字幕一覧</div><div class="list">${list.map(x=>`<div class="li ${c&&c.id===x.id?'on':''}" data-cap="${x.id}"><span class="t">${isFinite(capTl(x))?fmt(capTl(x)):'カット中'}</span><span class="x">${x.spk!=null&&S.spk&&S.spk.n?`<span class="sd" style="background:${SPK_COL[x.spk%SPK_COL.length]}"></span>`:''}${esc(x.text)}</span><button data-act="capedit" data-v="${x.id}">編集</button></div>`).join('')||'<p class="hint">まだありません</p>'}</div>`}
   if(k==='sfx'){const x=S.sel&&S.sel.kind==='sfx'?selItem():null,fav=LS.get('kiri.fav',[]).filter(id=>sfxById(id));const cat=S.sfxCat||'マイ効果音';const cats=['マイ効果音','お気に入り'];
     const list=cat==='お気に入り'?fav.map(sfxById).filter(Boolean):SFX.filter(s=>s.cat===cat);
     h=shTop('効果音',`<span class="badge">＋で再生位置に挿入</span>`)+`<div class="chips" style="margin-top:4px">${cats.map(c=>`<button class="chip ${c===cat?'on':''}" data-act="scat" data-v="${c}">${c==='お気に入り'?'★ ':''}${c}</button>`).join('')}</div>
@@ -1908,6 +1961,12 @@ sheet.addEventListener('click',async e=>{
     talign:()=>{pushUndo();applyStyle('align',v);renderPanel()},
     va:()=>{pushUndo();applyStyle('va',v);renderPanel()},
     bkwrap:()=>{if(!S.captions.length)return;pushUndo();let n=0;for(const c of S.captions){const t=c.text.replace(/\n/g,'');const nt=splitLines(units(t),S.split.maxLine,S.split.lines).join('\n');if(nt!==c.text){c.text=nt;n++}}req();autosave();renderPanel();toast(`${n}個の字幕の改行を整えました`)},
+    dia:()=>runDiarize(),
+    spknum:()=>{spkCfg().num=+v;renderPanel()},
+    spkpick:()=>{S.ui.spkPick=S.ui.spkPick===+v?null:+v;renderPanel()},
+    spktpl:()=>{const i=S.ui.spkPick;if(i==null)return;pushUndo();const cfg=spkCfg();cfg.tpl[i]=v;let n=0;for(const c of S.captions)if(c.spk===i&&applySpk(c))n++;req();autosave();renderPanel();toast(`${spkName(i)}の字幕${n}個に反映しました`)},
+    spkre:()=>{pushUndo();let n=0;for(const c of S.captions)if(applySpk(c))n++;req();autosave();renderPanel();toast(`${n}個の字幕に反映しました`)},
+    spkset:()=>{const it=selItem();if(!it)return;pushUndo();it.spk=+v;applySpk(it);req();autosave();renderPanel();drawTl&&drawTl()},
     bkva:()=>{S.ui.bulk.va=v;S.ui.bulk.dirty=true;renderPanel();req()},
     gmode:()=>{pushUndo();for(const s of styleTargets()){s.grad=s.grad||{stops:[s.fill||'#ffffff','#ffd23f'],ang:0};s.grad.on=v==='1';if(v==='1'&&s.grad.stops[0]==='#ffffff'&&s.fill&&s.fill!=='#ffffff')s.grad.stops[0]=s.fill}req();autosave();renderPanel()},
     gstop:()=>{S.ui.gstop=ix;renderPanel()},
