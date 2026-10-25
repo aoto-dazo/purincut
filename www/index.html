@@ -1821,7 +1821,7 @@ function renderPanel(fresh){const k=S.panel;if(!k)return;const keep=!fresh&&shee
   if(k==='cap'){const c=S.sel&&S.sel.kind==='cap'?selItem():null;const list=S.captions.slice().sort((a,b)=>capTl(a)-capTl(b));
     h=shTop('字幕',`<span class="badge">${S.captions.length}個</span>`)+
     `<div class="row"><button class="pri" data-act="asr">自動文字起こし</button><button data-act="srt">SRT/VTTを読込</button><button data-act="addcap">再生位置に追加</button><button data-act="bulkstyle">全体のスタイル</button></div>
-     <p class="hint" id="asrInfo">${S.chars.length?`文字起こし済み（${S.chars.length}文字）。区切り設定を変えて作り直せます。`:'Whisperで端末内処理。SRT読込や手入力もできます。'}</p>
+     <p class="hint" id="asrInfo">${S.chars.length?`文字起こし済み（${S.chars.length}文字）。区切り設定を変えて作り直せます。`:'iPhoneの音声認識で文字起こしします。SRT読込や手入力もできます。'}</p>
      <div class="sheet-h4">区切り</div>${rng('1行の文字数','split.maxLine',6,24,1,S.split.maxLine,'字')}
      <div class="row"><label>行数</label><span class="seg">${[1,2].map(n=>`<button data-act="lines" data-v="${n}" class="${S.split.lines===n?'on':''}">${n}行</button>`).join('')}</span>
      <label>区切り方</label><span class="seg"><button data-act="smode" data-v="bunsetsu" class="${S.split.mode==='bunsetsu'?'on':''}">文節</button><button data-act="smode" data-v="chars" class="${S.split.mode==='chars'?'on':''}">文字数</button></span>
