@@ -2,14 +2,14 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>編集する動画を写真ライブラリから読み込みます。</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>書き出した動画をカメラロールに保存します。</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>動画の音声から字幕を自動で作るために使います（端末内で処理します）。</string>
-	<key>NSMicrophoneUsageDescription</key>
-	<string>音声認識の機能で使用します。</string>
 	<key>UIFileSharingEnabled</key>
 	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
