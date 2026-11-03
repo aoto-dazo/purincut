@@ -50,6 +50,7 @@ import PhotosUI
 import Speech
 import UniformTypeIdentifiers
 import FluidAudio
+import Vision
 
 /// 独自プラグインを登録するためのビューコントローラー（Main.storyboard から使う）
 class PurinBridgeViewController: CAPBridgeViewController {
@@ -94,7 +95,10 @@ public class PurinNativePlugin: CAPPlugin, CAPBridgedPlugin, PHPickerViewControl
         CAPPluginMethod(name: "audioFXStatus", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "commitFile", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "diarize", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "diarizeStatus", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "diarizeStatus", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "trackFx", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "trackFxStatus", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "trackFxCancel", returnType: CAPPluginReturnPromise)
     ]
     var fxProgress: [String: Double] = [:]
     var diarState: [String: [String: Any]] = [:]
@@ -542,7 +546,7 @@ final class PurinPlayer {
             do { built = try purinBuildComposition(o, assets: &self.assets, mediaURL: mediaURL) } catch { done("合成できません: \(error.localizedDescription)"); return }
             let comp = built.comp, transform: CGAffineTransform? = built.transform, natural = built.natural
             self.audioTrackID = built.audioID
-            let spec = RenderSpec(o, W: W, H: H, natural: natural, transform: transform ?? .identity)
+            let spec = RenderSpec(o, W: W, H: H, natural: natural, transform: transform ?? .identity, mediaURL: mediaURL)
             let vc = AVMutableVideoComposition(asset: comp) { req in
                 let out = spec.render(req.sourceImage, time: CMTimeGetSeconds(req.compositionTime))
                 req.finish(with: out, context: nil)
@@ -608,8 +612,16 @@ struct RenderSpec {
     let zooms: [Zoom]
     let orient: CGImagePropertyOrientation?
     let natural: CGSize
+    struct FxKey { let t: Double; let boxes: [CGRect] }   // 正規化・左上原点（向きを直した元映像の座標）
+    struct Fx { let t0, t1: Double; let kind: String; let strength: Double; let color: CIColor; let ellipse: Bool; let pad: Double; let keys: [FxKey]; let image: CIImage?; let mode: String; let bg: CIColor? }
+    let fxs: [Fx]
+    static func hexColor(_ h: String) -> CIColor {
+        let hex = h.trimmingCharacters(in: CharacterSet(charactersIn: "# "))
+        var v: UInt64 = 0; Scanner(string: hex).scanHexInt64(&v)
+        return CIColor(red: CGFloat((v >> 16) & 255) / 255, green: CGFloat((v >> 8) & 255) / 255, blue: CGFloat(v & 255) / 255)
+    }
 
-    init(_ o: [String: Any], W: CGFloat, H: CGFloat, natural: CGSize, transform: CGAffineTransform) {
+    init(_ o: [String: Any], W: CGFloat, H: CGFloat, natural: CGSize, transform: CGAffineTransform, mediaURL: ((String) -> URL)? = nil) {
         self.W = W; self.H = H; self.natural = natural
         let lay = o["layout"] as? [String: Any] ?? [:]
         blur = (lay["bg"] as? String) == "blur"
@@ -639,6 +651,31 @@ struct RenderSpec {
             zs.append(Zoom(t0: d("t0", 0), t1: d("t1", 0), z: max(1, d("z", 1)), x: d("x", 0), y: d("y", 0)))
         }
         zooms = zs
+        // 追従エフェクト（モザイク・ぼかし・塗りつぶし・画像・人物の切り抜き）
+        var fl: [Fx] = []
+        for f in o["fx"] as? [[String: Any]] ?? [] {
+            func d(_ k: String, _ v: Double) -> Double { (f[k] as? NSNumber)?.doubleValue ?? v }
+            var keys: [FxKey] = []
+            for k in f["keys"] as? [Any] ?? [] {
+                guard let arr = k as? [Any], arr.count >= 2, let t = (arr[0] as? NSNumber)?.doubleValue else { continue }
+                var bs: [CGRect] = []
+                for b in arr[1] as? [Any] ?? [] {
+                    if let q = b as? [Any], q.count >= 4 {
+                        let n = q.map { ($0 as? NSNumber)?.doubleValue ?? 0 }
+                        bs.append(CGRect(x: n[0], y: n[1], width: n[2], height: n[3]))
+                    }
+                }
+                keys.append(FxKey(t: t, boxes: bs))
+            }
+            keys.sort { $0.t < $1.t }
+            var img: CIImage? = nil
+            if let n = f["img"] as? String, let mu = mediaURL { img = CIImage(contentsOf: mu(n)) }
+            let bgc: CIColor? = (f["bg"] as? String).flatMap { $0.isEmpty ? nil : RenderSpec.hexColor($0) }
+            fl.append(Fx(t0: d("t0", 0), t1: d("t1", 0), kind: f["kind"] as? String ?? "pixel", strength: d("strength", 50),
+                         color: RenderSpec.hexColor(f["color"] as? String ?? "#ffffff"), ellipse: (f["shape"] as? String) == "ellipse",
+                         pad: d("pad", 0.2), keys: keys, image: img, mode: f["mode"] as? String ?? "", bg: bgc))
+        }
+        fxs = fl
         // 回転情報（縦撮影など）
         let a = transform.a, b = transform.b
         if abs(a) < 0.01 && b > 0.5 { orient = .right } else if abs(a) < 0.01 && b < -0.5 { orient = .left } else if a < -0.5 { orient = .down } else { orient = nil }
@@ -657,6 +694,106 @@ struct RenderSpec {
         return o
     }
 
+    // ある時刻の追従の枠（前後のキーの間をなめらかにつなぐ）
+    func fxBoxes(_ f: Fx, _ t: Double) -> [CGRect] {
+        let k = f.keys
+        if k.isEmpty { return [] }
+        if t <= k[0].t { return k[0].t - t < 0.25 ? k[0].boxes : [] }
+        let n = k.count - 1
+        if t >= k[n].t { return t - k[n].t < 0.25 ? k[n].boxes : [] }
+        var lo = 0, hi = n
+        while hi - lo > 1 { let m = (lo + hi) / 2; if k[m].t <= t { lo = m } else { hi = m } }
+        let a = k[lo], b = k[hi]
+        if b.t - a.t > 0.6 || a.boxes.count != b.boxes.count { return (t - a.t < b.t - t) ? a.boxes : b.boxes }
+        let u = CGFloat((t - a.t) / max(1e-6, b.t - a.t))
+        return zip(a.boxes, b.boxes).map { p, q in
+            CGRect(x: p.minX + (q.minX - p.minX) * u, y: p.minY + (q.minY - p.minY) * u, width: p.width + (q.width - p.width) * u, height: p.height + (q.height - p.height) * u)
+        }
+    }
+
+    private func applyFx(_ src: CIImage, time: Double) -> CIImage {
+        var out = src
+        let ext = src.extent, vw = ext.width, vh = ext.height, short = min(vw, vh)
+        for f in fxs where f.kind != "cutout" && time >= f.t0 - 0.0005 && time < f.t1 {
+            for nb in fxBoxes(f, time) {
+                let pw = nb.width * CGFloat(f.pad), ph = nb.height * CGFloat(f.pad)
+                let r0 = CGRect(x: (nb.minX - pw / 2) * vw, y: (1 - nb.maxY - ph / 2) * vh, width: (nb.width + pw) * vw, height: (nb.height + ph) * vh)
+                let r = r0.intersection(ext)
+                if r.isNull || r.width < 2 || r.height < 2 { continue }
+                var eff: CIImage
+                switch f.kind {
+                case "blur":
+                    eff = out.clampedToExtent().applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: max(2, short * CGFloat(f.strength) / 600)]).cropped(to: ext)
+                case "fill":
+                    eff = CIImage(color: f.color).cropped(to: ext)
+                case "image":
+                    guard let im = f.image, im.extent.width > 0, im.extent.height > 0 else { continue }
+                    let sc = max(r0.width / im.extent.width, r0.height / im.extent.height)
+                    let st = im.transformed(by: CGAffineTransform(translationX: -im.extent.minX, y: -im.extent.minY)).transformed(by: CGAffineTransform(scaleX: sc, y: sc))
+                    let placed = st.transformed(by: CGAffineTransform(translationX: r0.midX - st.extent.width / 2, y: r0.midY - st.extent.height / 2))
+                    out = placed.composited(over: out).cropped(to: ext)
+                    continue
+                default:
+                    let block = max(4, short * CGFloat(f.strength) / 1200)
+                    eff = out.clampedToExtent().applyingFilter("CIPixellate", parameters: [kCIInputScaleKey: block, kCIInputCenterKey: CIVector(x: r0.minX, y: r0.minY)]).cropped(to: ext)
+                }
+                if f.ellipse, let g = CIFilter(name: "CIRadialGradient", parameters: ["inputCenter": CIVector(x: 0, y: 0), "inputRadius0": 94, "inputRadius1": 100, "inputColor0": CIColor.white, "inputColor1": CIColor.clear])?.outputImage {
+                    let m = g.cropped(to: CGRect(x: -100, y: -100, width: 200, height: 200))
+                        .transformed(by: CGAffineTransform(scaleX: r0.width / 200, y: r0.height / 200))
+                        .transformed(by: CGAffineTransform(translationX: r0.midX, y: r0.midY))
+                    out = eff.applyingFilter("CIBlendWithMask", parameters: [kCIInputBackgroundImageKey: out, kCIInputMaskImageKey: m]).cropped(to: ext)
+                } else {
+                    out = eff.cropped(to: r).composited(over: out).cropped(to: ext)
+                }
+            }
+        }
+        return out
+    }
+
+    // 人物の切り抜き（選んだ人だけ、または全員を残して背景を消す）
+    private func cutout(_ src: CIImage, time: Double) -> CIImage? {
+        guard let f = fxs.first(where: { $0.kind == "cutout" && time >= $0.t0 - 0.0005 && time < $0.t1 }) else { return nil }
+        let ext = src.extent
+        let bg = f.bg.map { CIImage(color: $0).cropped(to: ext) } ?? CIImage.empty()
+        let handler = VNImageRequestHandler(ciImage: src, options: [:])
+        var mask: CIImage?
+        if f.mode == "all" || f.keys.isEmpty {
+            let r = VNGeneratePersonSegmentationRequest()
+            r.qualityLevel = .balanced
+            r.outputPixelFormat = kCVPixelFormatType_OneComponent8
+            try? handler.perform([r])
+            if let pb = r.results?.first?.pixelBuffer { mask = CIImage(cvPixelBuffer: pb) }
+        } else {
+            let r = VNGeneratePersonInstanceMaskRequest()
+            try? handler.perform([r])
+            if let obs = r.results?.first {
+                var pick = obs.allInstances
+                if let b = fxBoxes(f, time).first { pick = RenderSpec.instanceIn(obs.instanceMask, b) }
+                if !pick.isEmpty, let pb = try? obs.generateScaledMaskForImage(forInstances: pick, from: handler) { mask = CIImage(cvPixelBuffer: pb) }
+            }
+        }
+        guard var m = mask, m.extent.width > 0, m.extent.height > 0 else { return bg }
+        m = m.transformed(by: CGAffineTransform(scaleX: ext.width / m.extent.width, y: ext.height / m.extent.height))
+        return src.applyingFilter("CIBlendWithMask", parameters: [kCIInputBackgroundImageKey: bg, kCIInputMaskImageKey: m]).cropped(to: ext)
+    }
+
+    // 枠の中に一番多く写っている人の番号
+    static func instanceIn(_ pb: CVPixelBuffer, _ b: CGRect) -> IndexSet {
+        CVPixelBufferLockBaseAddress(pb, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(pb, .readOnly) }
+        let w = CVPixelBufferGetWidth(pb), h = CVPixelBufferGetHeight(pb), row = CVPixelBufferGetBytesPerRow(pb)
+        guard let base = CVPixelBufferGetBaseAddress(pb) else { return [] }
+        let p = base.assumingMemoryBound(to: UInt8.self)
+        let x0 = max(0, Int(b.minX * CGFloat(w))), x1 = min(w - 1, Int(b.maxX * CGFloat(w)))
+        let y0 = max(0, Int(b.minY * CGFloat(h))), y1 = min(h - 1, Int(b.maxY * CGFloat(h)))
+        if x1 <= x0 || y1 <= y0 { return [] }
+        var cnt = [Int](repeating: 0, count: 256)
+        for y in y0...y1 { for x in x0...x1 { cnt[Int(p[y * row + x])] += 1 } }
+        cnt[0] = 0
+        if let m = cnt.indices.max(by: { cnt[$0] < cnt[$1] }), cnt[m] > 0 { return IndexSet(integer: m) }
+        return []
+    }
+
     func render(_ source: CIImage, time: Double) -> CIImage {
         var src = source
         // 回転がまだ反映されていなければここで回す
@@ -664,6 +801,10 @@ struct RenderSpec {
             src = src.oriented(o)
         }
         src = src.transformed(by: CGAffineTransform(translationX: -src.extent.minX, y: -src.extent.minY))
+        if !fxs.isEmpty { src = applyFx(src, time: time) }
+        var fullSrc = src
+        var cutApplied = false
+        if let c = cutout(src, time: time) { src = c; cutApplied = true }
         let vw = src.extent.width, vh = src.extent.height
         // ズーム（元の映像を拡大して、見せる位置をずらす）
         if let zm = zooms.first(where: { time >= $0.t0 - 0.0005 && time < $0.t1 }), zm.z > 1.001 {
@@ -671,6 +812,7 @@ struct RenderSpec {
             let cx = vw / 2 + CGFloat(zm.x) * (vw - zw) / 2, cyTop = vh / 2 + CGFloat(zm.y) * (vh - zh) / 2
             let r = CGRect(x: cx - zw / 2, y: vh - (cyTop + zh / 2), width: zw, height: zh)
             src = src.cropped(to: r).transformed(by: CGAffineTransform(translationX: -r.minX, y: -r.minY)).transformed(by: CGAffineTransform(scaleX: z, y: z))
+            if cutApplied { fullSrc = fullSrc.cropped(to: r).transformed(by: CGAffineTransform(translationX: -r.minX, y: -r.minY)).transformed(by: CGAffineTransform(scaleX: z, y: z)) }
         }
         let a = adjs.first { time >= $0.t0 - 0.0005 && time < $0.t1 }
         let full = CGRect(x: 0, y: 0, width: W, height: H)
@@ -679,7 +821,7 @@ struct RenderSpec {
         let base = adjust(src, a, fx: false)
         if blur {
             let s = max(W / vw, H / vh) * 0.1
-            let small = base.transformed(by: CGAffineTransform(scaleX: s, y: s))
+            let small = (cutApplied ? adjust(fullSrc, a, fx: false) : base).transformed(by: CGAffineTransform(scaleX: s, y: s))
             let bl = small.clampedToExtent().applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 6]).cropped(to: small.extent)
             let up = bl.transformed(by: CGAffineTransform(scaleX: 10, y: 10))
             let dx = (W - up.extent.width) / 2 - up.extent.minX, dy = (H - up.extent.height) / 2 - up.extent.minY
@@ -801,7 +943,7 @@ final class PurinExporter {
                     return Ov(t0: ($0["t0"] as? NSNumber)?.doubleValue ?? 0, t1: ($0["t1"] as? NSNumber)?.doubleValue ?? 0, url: tmpURL(f))
                 }
                 let cache = NSCache<NSURL, CIImage>(); cache.countLimit = 6
-                let spec = RenderSpec(o, W: W, H: H, natural: built.natural, transform: built.transform)
+                let spec = RenderSpec(o, W: W, H: H, natural: built.natural, transform: built.transform, mediaURL: mediaURL)
                 let k = RW / W
                 let vc = AVMutableVideoComposition(asset: comp) { req in
                     let t = CMTimeGetSeconds(req.compositionTime)
@@ -1119,4 +1261,147 @@ extension PurinNativePlugin {
         diarLock.lock(); let v = diarState[call.getString("name") ?? ""] ?? ["phase": "none", "progress": 0.0]; diarLock.unlock()
         call.resolve(v)
     }
+}
+
+// MARK: 追従（顔・人物・指定した範囲を動画の中で追いかける。Visionを端末内で実行）
+final class PurinTracker {
+    private static var progress: [String: Double] = [:]
+    private static var cancelled: Set<String> = []
+    private static let lock = NSLock()
+    static func set(_ k: String, _ v: Double) { lock.lock(); progress[k] = v; lock.unlock() }
+    static func get(_ k: String) -> Double { lock.lock(); defer { lock.unlock() }; return progress[k] ?? 0 }
+    static func cancel(_ k: String) { lock.lock(); cancelled.insert(k); lock.unlock() }
+    static func isCancelled(_ k: String) -> Bool { lock.lock(); defer { lock.unlock() }; return cancelled.contains(k) }
+    static func err(_ m: String) -> NSError { NSError(domain: "purin", code: 30, userInfo: [NSLocalizedDescriptionKey: m]) }
+    static func r4(_ v: CGFloat) -> Double { (Double(v) * 10000).rounded() / 10000 }
+    static func r4(_ v: Double) -> Double { (v * 10000).rounded() / 10000 }
+
+    /// rect・point は「向きを直した映像」での正規化座標（左上原点）。戻り値は [[元動画の秒, [[x,y,w,h], ...]], ...]
+    static func run(url: URL, from: Double, to: Double, mode: String, rect: CGRect?, point: CGPoint?, key: String) throws -> [[Any]] {
+        lock.lock(); cancelled.remove(key); lock.unlock()
+        set(key, 0)
+        let asset = AVURLAsset(url: url)
+        guard let vt = asset.tracks(withMediaType: .video).first else { throw err("映像がありません") }
+        let tf = vt.preferredTransform
+        let ori: CGImagePropertyOrientation = (abs(tf.a) < 0.01 && tf.b > 0.5) ? .right : (abs(tf.a) < 0.01 && tf.b < -0.5) ? .left : (tf.a < -0.5 ? .down : .up)
+        let dur = CMTimeGetSeconds(asset.duration)
+        let t0 = max(0, from), t1 = min(dur, max(from + 0.05, to))
+        let reader = try AVAssetReader(asset: asset)
+        reader.timeRange = CMTimeRange(start: purinCT(t0), end: purinCT(t1))
+        let out = AVAssetReaderTrackOutput(track: vt, outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange])
+        out.alwaysCopiesSampleData = false
+        reader.add(out)
+        guard reader.startReading() else { throw reader.error ?? err("動画を読み込めません") }
+
+        let seq = VNSequenceRequestHandler()
+        var tracker: VNTrackObjectRequest? = nil
+        var last: [CGRect] = []          // Visionの座標（左下原点）
+        var lastSeen = -1.0
+        var keys: [[Any]] = []
+        var lastT = -1.0
+        var first = true
+        let p0: CGPoint = point.map { CGPoint(x: $0.x, y: 1 - $0.y) } ?? CGPoint(x: 0.5, y: 0.5)
+        func flipY(_ r: CGRect) -> CGRect { CGRect(x: r.minX, y: 1 - r.maxY, width: r.width, height: r.height) }
+        func dist(_ a: CGRect, _ b: CGRect) -> CGFloat { hypot(a.midX - b.midX, a.midY - b.midY) }
+        func startTracker(_ vn: CGRect, _ pb: CVPixelBuffer) {
+            let r = VNTrackObjectRequest(detectedObjectObservation: VNDetectedObjectObservation(boundingBox: vn))
+            r.trackingLevel = .accurate
+            tracker = r
+            try? seq.perform([r], on: pb, orientation: ori)
+            if let o = r.results?.first as? VNDetectedObjectObservation { r.inputObservation = o }
+        }
+        func track(_ pb: CVPixelBuffer) -> CGRect? {
+            guard let tr = tracker else { return nil }
+            do { try seq.perform([tr], on: pb, orientation: ori) } catch { return nil }
+            guard let o = tr.results?.first as? VNDetectedObjectObservation else { return nil }
+            tr.inputObservation = o
+            return o.confidence > 0.2 ? o.boundingBox : nil
+        }
+        func moved(_ t: CGRect, size prev: CGRect) -> CGRect { CGRect(x: t.midX - prev.width / 2, y: t.midY - prev.height / 2, width: prev.width, height: prev.height) }
+
+        while let sb = out.copyNextSampleBuffer() {
+            if isCancelled(key) { reader.cancelReading(); throw err("中止しました") }
+            let pts = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sb))
+            guard let pb = CMSampleBufferGetImageBuffer(sb) else { continue }
+            if lastT >= 0 && pts - lastT < 1.0 / 30 - 0.002 { continue }
+            lastT = pts
+            var cur: [CGRect] = []
+            autoreleasepool {
+                switch mode {
+                case "faces", "face":
+                    let req = VNDetectFaceRectanglesRequest()
+                    try? VNImageRequestHandler(cvPixelBuffer: pb, orientation: ori, options: [:]).perform([req])
+                    let faces = (req.results ?? []).map { $0.boundingBox }
+                    if mode == "faces" {
+                        if !faces.isEmpty { cur = faces; last = faces; lastSeen = pts } else if pts - lastSeen < 0.4 { cur = last }
+                    } else {
+                        if first {
+                            if let f = faces.first(where: { $0.insetBy(dx: -$0.width * 0.4, dy: -$0.height * 0.4).contains(p0) }) ?? faces.min(by: { hypot($0.midX - p0.x, $0.midY - p0.y) < hypot($1.midX - p0.x, $1.midY - p0.y) }) {
+                                cur = [f]
+                            } else if let r = rect { cur = [flipY(r)] } else { cur = [CGRect(x: p0.x - 0.08, y: p0.y - 0.06, width: 0.16, height: 0.12)] }
+                            startTracker(cur[0], pb)
+                        } else if let prev = last.first {
+                            let lim = max(prev.width, prev.height) * 1.2
+                            if let f = faces.filter({ dist($0, prev) < lim }).min(by: { dist($0, prev) < dist($1, prev) }) {
+                                cur = [f]; startTracker(f, pb)
+                            } else if let t = track(pb) { cur = [moved(t, size: prev)] } else { cur = [prev] }
+                        }
+                        last = cur
+                    }
+                case "person":
+                    if first {
+                        let req = VNDetectHumanRectanglesRequest()
+                        req.upperBodyOnly = false
+                        try? VNImageRequestHandler(cvPixelBuffer: pb, orientation: ori, options: [:]).perform([req])
+                        let hs = (req.results ?? []).map { $0.boundingBox }
+                        let pick = hs.first(where: { $0.contains(p0) }) ?? hs.min(by: { hypot($0.midX - p0.x, $0.midY - p0.y) < hypot($1.midX - p0.x, $1.midY - p0.y) }) ?? CGRect(x: p0.x - 0.15, y: p0.y - 0.3, width: 0.3, height: 0.6)
+                        cur = [pick]; startTracker(pick, pb)
+                    } else if let t = track(pb) { cur = [t] } else { cur = last }
+                    last = cur
+                default:
+                    if first {
+                        let r = rect.map { flipY($0) } ?? CGRect(x: p0.x - 0.1, y: p0.y - 0.1, width: 0.2, height: 0.2)
+                        cur = [r]; startTracker(r, pb)
+                    } else if let prev = last.first {
+                        if let t = track(pb) { cur = [moved(t, size: prev)] } else { cur = [prev] }
+                    }
+                    last = cur
+                }
+            }
+            first = false
+            let unit = CGRect(x: 0, y: 0, width: 1, height: 1)
+            let bs: [[Double]] = cur.compactMap {
+                let r = flipY($0).intersection(unit)
+                return r.isNull ? nil : [r4(r.minX), r4(r.minY), r4(r.width), r4(r.height)]
+            }
+            keys.append([r4(pts), bs])
+            set(key, min(0.99, (pts - t0) / max(0.01, t1 - t0)))
+        }
+        if reader.status == .failed { throw reader.error ?? err("動画の読み込みに失敗しました") }
+        set(key, 1)
+        return keys
+    }
+}
+
+extension PurinNativePlugin {
+    @objc func trackFx(_ call: CAPPluginCall) {
+        guard let name = call.getString("name") else { call.reject("name がありません"); return }
+        let key = call.getString("key") ?? name
+        let from = call.getDouble("from") ?? 0, to = call.getDouble("to") ?? from + 5
+        let mode = call.getString("mode") ?? "box"
+        var rect: CGRect? = nil, point: CGPoint? = nil
+        if let r = call.getArray("rect") as? [NSNumber], r.count >= 4 { rect = CGRect(x: r[0].doubleValue, y: r[1].doubleValue, width: r[2].doubleValue, height: r[3].doubleValue) }
+        if let p = call.getArray("point") as? [NSNumber], p.count >= 2 { point = CGPoint(x: p[0].doubleValue, y: p[1].doubleValue) }
+        let url = mediaFileURL(name)
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let keys = try PurinTracker.run(url: url, from: from, to: to, mode: mode, rect: rect, point: point, key: key)
+                call.resolve(["keys": keys])
+            } catch {
+                call.reject("追従できませんでした: \(error.localizedDescription)")
+            }
+        }
+    }
+    @objc func trackFxStatus(_ call: CAPPluginCall) { call.resolve(["progress": PurinTracker.get(call.getString("key") ?? "")]) }
+    @objc func trackFxCancel(_ call: CAPPluginCall) { PurinTracker.cancel(call.getString("key") ?? ""); call.resolve() }
 }
