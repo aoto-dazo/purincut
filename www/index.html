@@ -214,6 +214,8 @@ input[type=checkbox]{width:18px;height:18px;accent-color:var(--cyan);margin:0}
 .li.on{border-color:var(--cap)}
 .li .t{font-family:var(--num);font-size:11px;color:var(--mute);font-variant-numeric:tabular-nums}
 .li .x{white-space:pre-wrap;word-break:break-all}
+#pickBar{position:fixed;left:max(12px,env(safe-area-inset-left,0px));right:max(12px,env(safe-area-inset-right,0px));bottom:calc(env(safe-area-inset-bottom,0px) + 96px);z-index:50;background:var(--panel);color:var(--fg);border-radius:16px;padding:12px 14px;display:flex;flex-direction:column;gap:8px;box-shadow:0 8px 28px rgba(0,0,0,.45);font-size:14px}
+#pickBar[hidden]{display:none}#pickBar b{font-size:17px}#pickBar .pbb{display:flex;gap:8px}#pickBar .pbb button{flex:1;padding:10px}
 .eg{width:100%;height:60px;display:block}.egbig{position:absolute;inset:0;width:100%;height:100%}
 .egbox{fill:none;stroke:rgba(127,127,127,.4);stroke-width:1;vector-effect:non-scaling-stroke}.egline{fill:none;stroke:var(--accent);stroke-width:2.5;vector-effect:non-scaling-stroke;stroke-linejoin:round}
 .egwrap{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:12px;align-items:start;margin:6px 0}
@@ -1600,7 +1602,7 @@ async function transcribe(){
 /* ================= 追従（モザイク・ぼかし・塗りつぶし・画像・人物の切り抜き） ================= */
 const FX_KINDS=[['pixel','モザイク'],['blur','ぼかし'],['fill','塗りつぶし'],['image','画像']];
 const FX_TARGETS=[['face','顔をタップ'],['faces','全員の顔'],['box','範囲を囲む'],['person','人物を切り抜き'],['people','全員を切り抜き']];
-const FX_BG=[['','背景なし'],['#000000','黒'],['#ffffff','白'],['#00ff00','グリーン']];
+const FX_BG=[['','透過（背景を消す）'],['#000000','黒'],['#ffffff','白'],['#00ff00','グリーン']];
 const FXUI={busy:false,pct:0,msg:'',key:null};
 const PICK={on:false,mode:null,target:null,a:null,b:null,redo:null};
 const isFx=o=>!!o&&o.type==='fx';
@@ -1641,21 +1643,40 @@ function drawFxLayer(ctx,tl,preview,natV,rs){const act=S.overlays.filter(o=>isFx
       ctx.restore();ctx.setTransform(rs,0,0,rs,0,0)}
     if(preview){const f=hit||{x:LW*.3,y:LH*.3,w:LW*.4,h:LH*.4};boxes.push({kind:'ov',id:o.id,cx:f.x+f.w/2,cy:f.y+f.h/2,hw:f.w/2,hh:f.h/2,rot:0,fx:true})}}}
 // 顔のタップ・範囲を囲むときの表示
-function fxPickOverlay(ctx){if(!PICK.on)return;ctx.save();ctx.fillStyle='rgba(0,0,0,.25)';ctx.fillRect(0,0,LW,LH);
+function fxPickOverlay(ctx){if(PICK.confirm){const c=PICK.confirm,m=layerMaps(S.tl);if(!m||!c.box)return;const b=c.target==='box'?c.box:padBox(c.box,.2);
+    ctx.save();const fs=m.maps.map(r=>boxToFrame(r,m,b));ctx.beginPath();ctx.rect(0,0,LW,LH);for(const f of fs)ctx.rect(f.x,f.y,f.w,f.h);ctx.fillStyle='rgba(0,0,0,.62)';ctx.fill('evenodd');
+    const pu=.5+.5*Math.sin(performance.now()/220);ctx.strokeStyle='#ff3b3b';ctx.lineWidth=7+3*pu;ctx.shadowColor='rgba(255,40,40,.95)';ctx.shadowBlur=24+26*pu;for(const f of fs)ctx.strokeRect(f.x,f.y,f.w,f.h);
+    ctx.shadowBlur=0;ctx.fillStyle=`rgba(255,59,59,${.1+.12*pu})`;for(const f of fs)ctx.fillRect(f.x,f.y,f.w,f.h);ctx.restore();req();return}
+  if(!PICK.on)return;ctx.save();ctx.fillStyle='rgba(0,0,0,.25)';ctx.fillRect(0,0,LW,LH);
   if(PICK.a&&PICK.mode==='rect'){const x=Math.min(PICK.a.x,PICK.b.x),y=Math.min(PICK.a.y,PICK.b.y),w=Math.abs(PICK.a.x-PICK.b.x),h=Math.abs(PICK.a.y-PICK.b.y);ctx.strokeStyle='#ffd23f';ctx.lineWidth=6;ctx.setLineDash([18,10]);ctx.strokeRect(x,y,w,h)}
   ctx.setLineDash([]);ctx.fillStyle='#fff';ctx.font=`800 ${Math.round(Math.min(LW,LH)*.05)}px system-ui,sans-serif`;ctx.textAlign='center';ctx.shadowColor='rgba(0,0,0,.8)';ctx.shadowBlur=12;
   ctx.fillText(PICK.mode==='rect'?'指でなぞって範囲を囲んでください':PICK.target==='person'?'残したい人物をタップ':'モザイクをかけたい顔をタップ',LW/2,LH*.08);ctx.restore()}
 function startPick(target,redo){const sa=srcAt(S.tl);if(!sa){toast('動画が映っている所に再生位置を合わせてください');return}
-  pause();PICK.on=true;PICK.target=target;PICK.mode=target==='box'?'rect':'tap';PICK.a=PICK.b=null;PICK.redo=redo||null;openPanel(null);req()}
+  pause();PICK.on=true;PICK.confirm=null;PICK.target=target;PICK.mode=target==='box'?'rect':'tap';PICK.a=PICK.b=null;PICK.redo=redo||null;openPanel(null);showPickBar();req()}
 (()=>{const host=pv.parentElement||document;const pt=e=>pvLogical(e);
-  host.addEventListener('pointerdown',e=>{if(!PICK.on||e.target!==pv)return;e.stopPropagation();e.preventDefault();try{pv.setPointerCapture(e.pointerId)}catch(_){}PICK.a=PICK.b=pt(e);req()},true);
+  host.addEventListener('pointerdown',e=>{if(PICK.confirm&&e.target===pv){e.stopPropagation();e.preventDefault();return}if(!PICK.on||e.target!==pv)return;e.stopPropagation();e.preventDefault();try{pv.setPointerCapture(e.pointerId)}catch(_){}PICK.a=PICK.b=pt(e);req()},true);
   host.addEventListener('pointermove',e=>{if(!PICK.on||!PICK.a)return;e.stopPropagation();PICK.b=pt(e);req()},true);
   const up=e=>{if(!PICK.on||!PICK.a)return;e.stopPropagation();e.preventDefault();const a=PICK.a,b=PICK.b;PICK.on=false;PICK.a=null;req();
     if(PICK.mode==='rect'){let x0=Math.min(a.x,b.x),y0=Math.min(a.y,b.y),x1=Math.max(a.x,b.x),y1=Math.max(a.y,b.y);if(x1-x0<40||y1-y0<40){const s=Math.min(LW,LH)*.12;x0=b.x-s;x1=b.x+s;y0=b.y-s;y1=b.y+s}
       const p=frameToSrc(S.tl,x0,y0),q=frameToSrc(S.tl,x1,y1);if(!p||!q){toast('映像の上を囲んでください');openPanel('track');return}
-      runTrack(PICK.target,{u:(p.u+q.u)/2,v:(p.v+q.v)/2},[Math.min(p.u,q.u),Math.min(p.v,q.v),Math.abs(q.u-p.u),Math.abs(q.v-p.v)],PICK.redo)}
-    else{const p=frameToSrc(S.tl,b.x,b.y);if(!p){toast('映像の上をタップしてください');openPanel('track');return}runTrack(PICK.target,p,null,PICK.redo)}};
+      pickConfirm(PICK.target,{u:(p.u+q.u)/2,v:(p.v+q.v)/2},[Math.min(p.u,q.u),Math.min(p.v,q.v),Math.abs(q.u-p.u),Math.abs(q.v-p.v)],PICK.redo)}
+    else{const p=frameToSrc(S.tl,b.x,b.y);if(!p){toast('映像の上をタップしてください');startPick(PICK.target,PICK.redo);return}pickConfirm(PICK.target,p,null,PICK.redo)}};
   host.addEventListener('pointerup',up,true);host.addEventListener('pointercancel',e=>{if(PICK.on&&PICK.a){PICK.a=null;req()}},true)})();
+// 選んだ所を赤く光らせて「これで大丈夫ですか？」と確認する
+async function pickConfirm(target,pt,rect,redo){const sa=srcAt(S.tl),m=sa&&srcMeta(sa.src);let box=rect;
+  if(target!=='box'){box=null;if(NATIVE&&m&&m.nat){try{const r=await nat('detectFx',{name:m.nat,time:sa.x,mode:target==='person'?'person':'face',point:[pt.u,pt.v]});box=r&&r.box}catch(e){box=null}}
+    else box=[pt.u-.08,pt.v-.06,.16,.12];
+    if(!box){toast(target==='person'?'人物が見つかりませんでした。もう一度タップしてください':'顔が見つかりませんでした。もう一度タップしてください');startPick(target,redo);return}}
+  PICK.on=false;PICK.confirm={target,pt,rect:box,redo,box};showPickBar();req()}
+const pickBar=document.createElement('div');pickBar.id='pickBar';pickBar.hidden=true;document.body.appendChild(pickBar);
+function showPickBar(){if(!PICK.on&&!PICK.confirm){pickBar.hidden=true;return}
+  pickBar.innerHTML=PICK.confirm?`<b>これで大丈夫ですか？</b><span class="hint" style="margin:0">赤く光っている${PICK.confirm.target==='person'?'人物':PICK.confirm.target==='box'?'範囲':'顔'}を追いかけます。</span><div class="pbb"><button data-pk="yes" class="pri">はい</button><button data-pk="again">やり直す</button><button data-pk="no">やめる</button></div>`
+    :`<span>${PICK.mode==='rect'?'プレビューを指でなぞって範囲を囲んでください':PICK.target==='person'?'プレビューで残したい人物をタップしてください':'プレビューでモザイクをかけたい顔をタップしてください'}</span><div class="pbb"><button data-pk="no">やめる</button></div>`;pickBar.hidden=false}
+pickBar.addEventListener('click',e=>{const b=e.target.closest('[data-pk]');if(!b)return;const c=PICK.confirm,k=b.dataset.pk;
+  if(k==='yes'&&c){PICK.confirm=null;showPickBar();req();runTrack(c.target,c.pt,c.rect,c.redo)}
+  else if(k==='again'){const t=c?c.target:PICK.target,r=c?c.redo:PICK.redo;PICK.confirm=null;startPick(t,r)}
+  else{PICK.on=false;PICK.confirm=null;PICK.a=null;showPickBar();openPanel('track');req()}});
+const hasClearCut=()=>S.overlays.some(o=>isFx(o)&&o.kind==='cutout'&&!o.bg);
 // 再生位置から、つながっている映像の終わりまで
 function contEnd(t){let p=pieceAt(t);if(!p)return t+3;let end=p.t+plen(p);for(;;){const i=eff.indexOf(p),nx=eff[i+1];if(nx&&nx.src===p.src&&Math.abs(nx.s-p.e)<.05&&Math.abs(nx.t-end)<.05){p=nx;end=p.t+plen(p)}else break}return end}
 async function runTrack(target,pt,rect,redoId){const d=fxNew();const sa=srcAt(S.tl);const m=sa&&srcMeta(sa.src);
@@ -1692,7 +1713,7 @@ function fxSec(){const it=selItem(),sel=isFx(it)?it:null,d=fxNew(),c=sel||{kind:
   if(!sel){h+=`<div class="sheet-h4">何を追いかける？</div><div class="chips">${FX_TARGETS.map(([v,l])=>`<button class="chip ${d.target===v?'on':''}" data-act="fxtarget" data-v="${v}">${l}</button>`).join('')}</div>`}
   const cut=sel?sel.kind==='cutout':(d.target==='person'||d.target==='people');
   if(cut){h+=`<div class="sheet-h4">消した背景</div><div class="chips">${FX_BG.map(([v,l])=>`<button class="chip ${(c.bg||'')===v?'on':''}" data-act="fxbg" data-v="${v}">${l}</button>`).join('')}</div>
-    <p class="hint">「背景なし」は黒（縦配置のぼかし背景がオンならぼかし）になります。グリーンは他のアプリで合成したいとき用です。</p>`}
+    <p class="hint">「透過」は人物以外を完全に消します（ぼかし背景も出ません）。普通の書き出しでは黒になり、書き出し画面で「背景を透過して書き出す」を選ぶと透明のまま保存できます。グリーンは他のアプリで合成したいとき用です。</p>`}
   else{h+=`<div class="sheet-h4">効果</div><div class="chips">${FX_KINDS.map(([v,l])=>`<button class="chip ${c.kind===v?'on':''}" data-act="fxkind" data-v="${v}">${l}</button>`).join('')}</div>`;
     if(c.kind==='pixel'||c.kind==='blur')h+=rng('強さ','fx.strength',5,100,1,c.strength||50);
     if(c.kind==='fill')h+=`<label class="field"><span>色</span><input type="color" data-f="fx.color" value="${c.color||'#ffffff'}"></label>`;
@@ -2059,6 +2080,7 @@ function renderPanel(fresh){const k=S.panel;if(!k)return;const keep=!fresh&&shee
   if(k==='exp'){const mime=pickMime();
     h=shTop('書き出し')+`<div class="row"><label>画質</label><span class="seg">${[720,1080].map(r=>`<button data-act="res" data-v="${r}" class="${S.exportRes===r?'on':''}">${LW>LH?`${r*16/9}×${r}`:`${r}×${r*16/9}`}</button>`).join('')}</span></div>
     <div class="row"><span class="badge">長さ ${fmt(tlDur)}</span><span class="badge">${npCanExport()?'MP4（iPhoneで処理）':mime?mime.split(';')[0]:'この端末は録画非対応'}</span><span class="badge">${fmtFps(projFps())}fps</span></div>
+    ${npCanExport()&&hasClearCut()?`<label class="allsw"><input type="checkbox" data-f="expAlpha" ${S.ui.expAlpha?'checked':''}>背景を透過して書き出す（HEVC・MOV）</label><p class="hint" style="margin:0 0 8px">人物の切り抜きで「透過」にした部分が透明のまま保存されます。透過に対応した編集アプリで使えます。</p>`:''}
     <div class="row"><button class="pri" data-act="export" ${(mime||npCanExport())&&!exporting?'':'disabled'}>書き出し開始</button><button data-act="cancelexp" ${exporting?'':'disabled'}>中止</button></div>
     <div class="bar"><i id="expBar"></i></div><p class="hint" id="expInfo">${npCanExport()?'iPhoneの動画エンジンで書き出し、終わるとカメラロールに保存します。':'実時間で録画します（1分の動画なら約1分）。終わるまで画面を消さず、このタブを開いたままにしてください。'}</p><div id="expOut"></div>`}
   sheet.innerHTML=h;sheet.dataset.p=k;sheet.scrollTop=keep;refreshTiles();initPickers()}
@@ -2100,6 +2122,7 @@ sheet.addEventListener('input',e=>{const el=e.target;
   if(out&&el.type==='range'){const st=+el.step;out.textContent=(+el.value).toFixed(st<1?(st<.1?2:1):0)+(out.textContent.match(/[^\d.\-]+$/)||[''])[0]}
   const f=el.dataset.f;if(!f)return;
   if(f==='applyAll'){S.ui.applyAll=val;return}
+  if(f==='expAlpha'){S.ui.expAlpha=val;return}
   if(f.startsWith('sil.')){S.sil[f.slice(4)]=val;silPreview=detectSilence();const tot=(silPreview||[]).reduce((a,r)=>a+r.b-r.a,0);const i=$('#silInfo');if(i)i.textContent=`${(silPreview||[]).length}か所・${tot.toFixed(1)}秒をカット`;const b=sheet.querySelector('[data-act=silapply]');if(b)b.disabled=!(silPreview||[]).length;req();return}
   if(f.startsWith('split.')){S.split[f.slice(6)]=val;return}
   if(f.startsWith('fx.')){const k=f.slice(3),it=selItem();if(isFx(it)){it[k]=k==='color'?val:k==='pad'?+val/100:+val;autosave()}else fxNew()[k]=k==='color'?val:+val;req();return}
@@ -2241,7 +2264,7 @@ $('#fFont').addEventListener('change',async e=>{const f=e.target.files[0];e.targ
 function shrinkImg(f,m=1024){return new Promise(res=>{const im=new Image();im.onload=()=>{const r=Math.min(1,m/Math.max(im.width,im.height));const c=document.createElement('canvas');c.width=Math.round(im.width*r);c.height=Math.round(im.height*r);c.getContext('2d').drawImage(im,0,0,c.width,c.height);res(c.toDataURL(f.type==='image/jpeg'?'image/jpeg':'image/png',.9));URL.revokeObjectURL(im.src)};im.src=URL.createObjectURL(f)})}
 function loadImg(o){const im=new Image();im.onload=()=>{o.img=im;o._ac=null;req()};im.src=o.dataUrl}
 $('#fImg').addEventListener('change',async e=>{const f=e.target.files[0];e.target.value='';if(!f)return;const url=await shrinkImg(f);pushUndo();const t=S.tl,d=3;
-  const o={id:uid('o'),type:'img',t,d,track:freeTrack(t,t+d),dataUrl:url,img:null,style:normImgStyle({anims:['ズームモーション']})};loadImg(o);S.overlays.push(o);S.sel={kind:'ov',id:o.id};S.ui.itab='place';fitTl();openPanel('img');toast('画像は長押しでつかむと移動できます')});
+  const o={id:uid('o'),type:'img',t,d,track:freeTrack(t,t+d),dataUrl:url,img:null,style:normImgStyle({anims:[]})};loadImg(o);S.overlays.push(o);S.sel={kind:'ov',id:o.id};S.ui.itab='place';fitTl();openPanel('img');toast('画像は長押しでつかむと移動できます')});
 $('#fAddImg').addEventListener('change',async e=>{const f=e.target.files[0];e.target.value='';if(!f)return;const url=await shrinkImg(f,1920);const meta=makeImageSource(url,f.name);pushUndo();S.sources.push(meta);insertSeg({id:uid('g'),src:meta.id,s:0,e:3,gap:0});toast('画像をメインに追加しました（端をドラッグで長さ調整）')});
 async function addNativeVideo(){pause();ensureAudio();let info;try{info=await pickNativeVideo()}catch(e){toast('動画を読み込めませんでした（'+(e&&e.message||e)+'）',3500);return}if(!info)return;
   status('動画を読み込み中…');let meta;try{meta=await makeVideoSourceNative(info)}catch(err){status('');toast('この動画形式は読み込めませんでした');return}
@@ -2379,7 +2402,7 @@ async function startExportNative(){pause();ensureAudio();const say=(m,pct)=>{con
     // 2) 効果音・BGM
     say('効果音・BGMを準備中…',32);const wav=await renderExtraAudio();let extra=null;if(wav){await natSendBlob('extra.wav',wav);extra='extra.wav'}
     // 3) iPhone側で合成・エンコード・保存
-    const proj=npProject();Object.assign(proj,{dur:tlDur,renderW:W,renderH:H,fps,origVol:S.audio.orig,extraAudio:extra,overlays:ovs.map(o=>({t0:o.t0,t1:o.t1,file:o.file}))});
+    const proj=npProject();Object.assign(proj,{dur:tlDur,renderW:W,renderH:H,fps,origVol:S.audio.orig,alpha:!!(S.ui.expAlpha&&hasClearCut()),extraAudio:extra,overlays:ovs.map(o=>({t0:o.t0,t1:o.t1,file:o.file}))});
     await nat('exportStart',proj);
     for(;;){await new Promise(r=>setTimeout(r,400));if(exporting.cancel){await nat('exportCancel');throw new Error('cancel')}
       const st=await nat('exportStatus');if(st.state==='running')say(`書き出し中…（iPhoneで処理） ${Math.round(st.progress*100)}%`,35+st.progress*63);

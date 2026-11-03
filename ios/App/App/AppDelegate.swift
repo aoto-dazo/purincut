@@ -98,7 +98,8 @@ public class PurinNativePlugin: CAPPlugin, CAPBridgedPlugin, PHPickerViewControl
         CAPPluginMethod(name: "diarizeStatus", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "trackFx", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "trackFxStatus", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "trackFxCancel", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "trackFxCancel", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "detectFx", returnType: CAPPluginReturnPromise)
     ]
     var fxProgress: [String: Double] = [:]
     var diarState: [String: [String: Any]] = [:]
@@ -751,8 +752,9 @@ struct RenderSpec {
     }
 
     // 人物の切り抜き（選んだ人だけ、または全員を残して背景を消す）
-    private func cutout(_ src: CIImage, time: Double) -> CIImage? {
+    private func cutout(_ src: CIImage, time: Double) -> (CIImage, Bool)? {
         guard let f = fxs.first(where: { $0.kind == "cutout" && time >= $0.t0 - 0.0005 && time < $0.t1 }) else { return nil }
+        let clear = f.bg == nil
         let ext = src.extent
         let bg = f.bg.map { CIImage(color: $0).cropped(to: ext) } ?? CIImage.empty()
         let handler = VNImageRequestHandler(ciImage: src, options: [:])
@@ -772,9 +774,9 @@ struct RenderSpec {
                 if !pick.isEmpty, let pb = try? obs.generateScaledMaskForImage(forInstances: pick, from: handler) { mask = CIImage(cvPixelBuffer: pb) }
             }
         }
-        guard var m = mask, m.extent.width > 0, m.extent.height > 0 else { return bg }
+        guard var m = mask, m.extent.width > 0, m.extent.height > 0 else { return (bg, clear) }
         m = m.transformed(by: CGAffineTransform(scaleX: ext.width / m.extent.width, y: ext.height / m.extent.height))
-        return src.applyingFilter("CIBlendWithMask", parameters: [kCIInputBackgroundImageKey: bg, kCIInputMaskImageKey: m]).cropped(to: ext)
+        return (src.applyingFilter("CIBlendWithMask", parameters: [kCIInputBackgroundImageKey: bg, kCIInputMaskImageKey: m]).cropped(to: ext), clear)
     }
 
     // 枠の中に一番多く写っている人の番号
@@ -803,8 +805,8 @@ struct RenderSpec {
         src = src.transformed(by: CGAffineTransform(translationX: -src.extent.minX, y: -src.extent.minY))
         if !fxs.isEmpty { src = applyFx(src, time: time) }
         var fullSrc = src
-        var cutApplied = false
-        if let c = cutout(src, time: time) { src = c; cutApplied = true }
+        var cutApplied = false, clearBG = false
+        if let c = cutout(src, time: time) { src = c.0; cutApplied = true; clearBG = c.1 }
         let vw = src.extent.width, vh = src.extent.height
         // ズーム（元の映像を拡大して、見せる位置をずらす）
         if let zm = zooms.first(where: { time >= $0.t0 - 0.0005 && time < $0.t1 }), zm.z > 1.001 {
@@ -816,10 +818,11 @@ struct RenderSpec {
         }
         let a = adjs.first { time >= $0.t0 - 0.0005 && time < $0.t1 }
         let full = CGRect(x: 0, y: 0, width: W, height: H)
-        var out = CIImage(color: .black).cropped(to: full)
+        // 背景を透過にした人物の切り抜き中は、黒やぼかし背景を敷かない（透明のまま）
+        var out = clearBG ? CIImage(color: .clear).cropped(to: full) : CIImage(color: .black).cropped(to: full)
         if vw < 2 || vh < 2 { return out }
         let base = adjust(src, a, fx: false)
-        if blur {
+        if blur && !clearBG {
             let s = max(W / vw, H / vh) * 0.1
             let small = (cutApplied ? adjust(fullSrc, a, fx: false) : base).transformed(by: CGAffineTransform(scaleX: s, y: s))
             let bl = small.clampedToExtent().applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 6]).cropped(to: small.extent)
@@ -968,12 +971,13 @@ final class PurinExporter {
                     let p = AVMutableAudioMixInputParameters(track: t); p.setVolume(1, at: .zero); params.append(p)
                 }
                 mix.inputParameters = params
-                let preset = RW * RH > 1280 * 720 * 1.1 ? AVAssetExportPresetHighestQuality : AVAssetExportPresetHighestQuality
+                let alpha = (o["alpha"] as? Bool) ?? false
+                let preset = alpha ? AVAssetExportPresetHEVCHighestQualityWithAlpha : AVAssetExportPresetHighestQuality
                 guard let ses = AVAssetExportSession(asset: comp, presetName: preset) else { throw NSError(domain: "purin", code: 11, userInfo: [NSLocalizedDescriptionKey: "書き出しを開始できません"]) }
-                let out = tmpURL("purincut_export_\(Int(Date().timeIntervalSince1970)).mp4")
+                let out = tmpURL("purincut_export_\(Int(Date().timeIntervalSince1970)).\(alpha ? "mov" : "mp4")")
                 try? FileManager.default.removeItem(at: out)
                 ses.outputURL = out
-                ses.outputFileType = .mp4
+                ses.outputFileType = alpha ? .mov : .mp4
                 ses.videoComposition = vc
                 ses.audioMix = mix
                 ses.shouldOptimizeForNetworkUse = true
@@ -1404,4 +1408,40 @@ extension PurinNativePlugin {
     }
     @objc func trackFxStatus(_ call: CAPPluginCall) { call.resolve(["progress": PurinTracker.get(call.getString("key") ?? "")]) }
     @objc func trackFxCancel(_ call: CAPPluginCall) { PurinTracker.cancel(call.getString("key") ?? ""); call.resolve() }
+}
+
+
+extension PurinNativePlugin {
+    /// 1コマの中で、タップした所の顔（または人物）の枠を探す。戻り値は正規化・左上原点
+    @objc func detectFx(_ call: CAPPluginCall) {
+        guard let name = call.getString("name") else { call.reject("name がありません"); return }
+        let time = call.getDouble("time") ?? 0, mode = call.getString("mode") ?? "face"
+        var p = CGPoint(x: 0.5, y: 0.5)
+        if let a = call.getArray("point") as? [NSNumber], a.count >= 2 { p = CGPoint(x: a[0].doubleValue, y: a[1].doubleValue) }
+        let url = mediaFileURL(name)
+        DispatchQueue.global(qos: .userInitiated).async {
+            let gen = AVAssetImageGenerator(asset: AVURLAsset(url: url))
+            gen.appliesPreferredTrackTransform = true
+            gen.requestedTimeToleranceBefore = .zero; gen.requestedTimeToleranceAfter = .zero
+            gen.maximumSize = CGSize(width: 1280, height: 1280)
+            guard let cg = try? gen.copyCGImage(at: purinCT(time), actualTime: nil) else { call.resolve(["box": NSNull()]); return }
+            let h = VNImageRequestHandler(cgImage: cg, options: [:])
+            let vp = CGPoint(x: p.x, y: 1 - p.y)
+            var boxes: [CGRect] = []
+            if mode == "person" {
+                let r = VNDetectHumanRectanglesRequest(); r.upperBodyOnly = false
+                try? h.perform([r]); boxes = (r.results ?? []).map { $0.boundingBox }
+            } else {
+                let r = VNDetectFaceRectanglesRequest()
+                try? h.perform([r]); boxes = (r.results ?? []).map { $0.boundingBox }
+            }
+            let d: (CGRect) -> CGFloat = { hypot($0.midX - vp.x, $0.midY - vp.y) }
+            let pick = boxes.first(where: { $0.insetBy(dx: -$0.width * 0.4, dy: -$0.height * 0.4).contains(vp) }) ?? boxes.filter({ d($0) < 0.25 }).min(by: { d($0) < d($1) })
+            if let b = pick {
+                call.resolve(["box": [b.minX, 1 - b.maxY, b.width, b.height], "count": boxes.count])
+            } else {
+                call.resolve(["box": NSNull(), "count": boxes.count])
+            }
+        }
+    }
 }
