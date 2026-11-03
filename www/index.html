@@ -1268,7 +1268,7 @@ pv.addEventListener('pointerdown',e=>{try{pv.setPointerCapture(e.pointerId)}catc
     const b=cur||cand.find(b=>inBox(b,p,pad));
     pp.moved=false;pp.pushed=false;pp.lifted=false;pp.dc={x:e.clientX,y:e.clientY};pp.p0=e.pressure||0;
     if(b){pp.hit={kind:b.kind,id:b.id};S.sel={kind:b.kind,id:b.id};req();
-      const isText=b.kind==='cap'||(b.kind==='ov'&&selItem({kind:'ov',id:b.id})?.type==='text');
+      const bt=b.kind==='ov'?selItem({kind:'ov',id:b.id})?.type:null,isText=b.kind==='cap'||bt==='text'||bt==='img';
       if(e.pointerType==='mouse'||isText){beginGesture();pp.lifted=true;pp.thresh=e.pointerType!=='mouse';buildPvSnap();return}
       pp.hold={x:p.x,y:p.y,t0:performance.now()};pp.timer=setTimeout(lift,HOLD_MS)}
     else{pp.hit=null;if(!layerMode&&S.sel&&S.sel.kind!=='seg'&&S.sel.kind!=='gap'){S.sel=null;req();renderPanel()}}
