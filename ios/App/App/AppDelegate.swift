@@ -776,6 +776,17 @@ struct RenderSpec {
         }
         guard var m = mask, m.extent.width > 0, m.extent.height > 0 else { return (bg, clear) }
         m = m.transformed(by: CGAffineTransform(scaleX: ext.width / m.extent.width, y: ext.height / m.extent.height))
+        // 選んだ人の追従枠の外は必ず消す（近くにいる別の人が残らないように）
+        if f.mode != "all", let b = fxBoxes(f, time).first {
+            let pw = b.width * 0.3, ph = b.height * 0.12
+            let r = CGRect(x: (b.minX - pw / 2) * ext.width, y: (1 - b.maxY - ph / 2) * ext.height, width: (b.width + pw) * ext.width, height: (b.height + ph) * ext.height).intersection(ext)
+            if !r.isNull {
+                let feather = max(4, min(r.width, r.height) * 0.04)
+                let box = CIImage(color: .white).cropped(to: r).composited(over: CIImage(color: .black).cropped(to: ext))
+                    .clampedToExtent().applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: feather]).cropped(to: ext)
+                m = m.applyingFilter("CIMultiplyCompositing", parameters: [kCIInputBackgroundImageKey: box]).cropped(to: ext)
+            }
+        }
         return (src.applyingFilter("CIBlendWithMask", parameters: [kCIInputBackgroundImageKey: bg, kCIInputMaskImageKey: m]).cropped(to: ext), clear)
     }
 
@@ -789,11 +800,15 @@ struct RenderSpec {
         let x0 = max(0, Int(b.minX * CGFloat(w))), x1 = min(w - 1, Int(b.maxX * CGFloat(w)))
         let y0 = max(0, Int(b.minY * CGFloat(h))), y1 = min(h - 1, Int(b.maxY * CGFloat(h)))
         if x1 <= x0 || y1 <= y0 { return [] }
-        var cnt = [Int](repeating: 0, count: 256)
-        for y in y0...y1 { for x in x0...x1 { cnt[Int(p[y * row + x])] += 1 } }
-        cnt[0] = 0
-        if let m = cnt.indices.max(by: { cnt[$0] < cnt[$1] }), cnt[m] > 0 { return IndexSet(integer: m) }
-        return []
+        var cnt = [Int](repeating: 0, count: 256), tot = [Int](repeating: 0, count: 256)
+        for y in 0..<h { for x in 0..<w { let v = Int(p[y * row + x]); if v == 0 { continue }; tot[v] += 1; if y >= y0 && y <= y1 && x >= x0 && x <= x1 { cnt[v] += 1 } } }
+        // 枠の中に多く入っていて、かつ枠の中に体の大部分がある人を選ぶ
+        var best = -1, bestScore = 0.0
+        for v in 1..<256 where cnt[v] > 0 {
+            let score = Double(cnt[v]) * Double(cnt[v]) / Double(max(1, tot[v]))
+            if score > bestScore { bestScore = score; best = v }
+        }
+        return best > 0 ? IndexSet(integer: best) : []
     }
 
     func render(_ source: CIImage, time: Double) -> CIImage {
