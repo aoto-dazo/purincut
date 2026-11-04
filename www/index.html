@@ -752,7 +752,7 @@ function drawFrame(ctx,W,H,tl,preview,ovOnly){
   }
   drawFxLayer(ctx,tl,preview,natV,rs);
   const ovs=S.overlays.filter(o=>tl>=o.t&&tl<o.t+o.d).sort((a,b)=>(a.track||2)-(b.track||2));
-  for(const o of ovs){const v=itemVisual(o);if(!v)continue;drawItem(ctx,v.cv,v.k,kfStyle(o,tl-o.t),evalAnim(o.style.anims,tl-o.t,o.d),rs,tl-o.t,preview&&{kind:'ov',id:o.id})}
+  for(const o of ovs){const v=kfVisual(o,tl-o.t);if(!v)continue;drawItem(ctx,v.cv,v.k,v.st,evalAnim(o.style.anims,tl-o.t,o.d),rs,tl-o.t,preview&&{kind:'ov',id:o.id})}
   if(sa)for(const c of S.captions){if(c.src!==sa.src||sa.x<c.s||sa.x>=c.e)continue;const st=bulkView(c);const cv=textCanvas(c.text,st);drawItem(ctx,cv,cv._k||1,st,evalAnim(st.anims,sa.x-c.s,c.e-c.s),rs,sa.x-c.s,preview&&{kind:'cap',id:c.id})}
   if(preview){
     fxPickOverlay(ctx);
@@ -1727,7 +1727,7 @@ function fxSec(){const it=selItem(),sel=isFx(it)?it:null,d=fxNew(),c=sel||{kind:
   return h}
 
 /* ================= キーフレーム（移動・回転・サイズ） ================= */
-const KF_PROPS=['x','y','rot','scale','scaleW'];
+const KF_PROPS=['x','y','rot','scale','scaleW','size'];
 function bezierFn(b){const [x1,y1,x2,y2]=b;const cx=3*x1,bx=3*(x2-x1)-cx,ax=1-cx-bx,cy=3*y1,by=3*(y2-y1)-cy,ay=1-cy-by;
   const X=t=>((ax*t+bx)*t+cx)*t,Y=t=>((ay*t+by)*t+cy)*t,dX=t=>(3*ax*t+2*bx)*t+cx;
   return x=>{if(x<=0)return 0;if(x>=1)return 1;let t=x;for(let i=0;i<8;i++){const e=X(t)-x,d=dX(t);if(Math.abs(e)<1e-5)break;if(Math.abs(d)<1e-6)break;t-=e/d}
@@ -1765,7 +1765,11 @@ function kfSet(o,lt,vals){const K=o.kf||(o.kf=[]);const f=K.find(k=>Math.abs(k.t
 function kfSync(){const it=S.sel&&S.sel.kind==='ov'?selItem():null;if(!it||isFx(it)||!it.kf||!it.kf.length||S.playing)return;
   const lt=S.tl-it.t,st=it.style,s=it._ks;
   if(s&&s.id===it.id&&Math.abs(s.lt-lt)<1e-4){if(KF_PROPS.some(p=>(st[p]??null)!==(s.v[p]??null))){const k=kfSet(it,lt,kfVals(st));S.ui.kfSel=k.id;it._ks={id:it.id,lt,v:kfVals(st)};autosave();if(S.panel&&(S.ui.tab==='kf'||S.ui.itab==='kf'))setTimeout(()=>{if(!pp.lifted)renderPanel()},0)}}
-  else{const v=kfAt(it,lt);for(const p of KF_PROPS)if(v[p]!=null)st[p]=v[p];it._ks={id:it.id,lt,v:kfVals(st)}}}
+  else{const v=kfAt(it,lt);for(const p of KF_PROPS){if(v[p]==null)continue;if(p==='size'){if(it.type==='text'&&Math.abs((st.size||0)-v.size)>1e-6)setFontSize(st,v.size)}else st[p]=v[p]}it._ks={id:it.id,lt,v:kfVals(st)}}}
+// キーフレームで文字の大きさが変わるときは、一番大きいサイズで描いてから縮めて、なめらかにする
+function kfVisual(o,lt){if(!(o.type==='text'&&o.kf&&o.kf.some(k=>k.size!=null))){const v=itemVisual(o);return v&&{cv:v.cv,k:v.k,st:kfStyle(o,lt)}}
+  const st=kfStyle(o,lt),maxS=Math.max(o.style.size||1,...o.kf.map(k=>k.size||0));const big=clone(o.style);setFontSize(big,maxS);const cv=textCanvas(o.text,big),f=(st.size||maxS)/maxS;
+  return{cv,k:cv._k||1,st:Object.assign({},st,{scale:(st.scale??100)*f,scaleW:(st.scaleW??st.scale??100)*f})}}
 function easeSvg(f,big){const pts=[];for(let i=0;i<=48;i++){const x=i/48;pts.push(`${(x*100).toFixed(1)},${((1-f(x))*100).toFixed(1)}`)}
   return `<svg viewBox="-6 -36 112 172" preserveAspectRatio="none" class="${big?'egbig':'eg'}"><rect x="0" y="0" width="100" height="100" class="egbox"/><polyline points="${pts.join(' ')}" class="egline"/></svg>`}
 function kfSub(o){if(!o)return'';const K=o.kf||[],lt=S.tl-o.t,at=K.find(k=>Math.abs(k.t-lt)<1/120);
