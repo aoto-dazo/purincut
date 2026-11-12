@@ -214,6 +214,14 @@ input[type=checkbox]{width:18px;height:18px;accent-color:var(--cyan);margin:0}
 .li.on{border-color:var(--cap)}
 .li .t{font-family:var(--num);font-size:11px;color:var(--mute);font-variant-numeric:tabular-nums}
 .li .x{white-space:pre-wrap;word-break:break-all}
+.rec{background:#e5383b!important;color:#fff!important}
+#recOv{position:fixed;inset:0;z-index:55;pointer-events:none;display:flex;flex-direction:column;align-items:center;justify-content:center}#recOv[hidden]{display:none}
+#recOv .recnum{font:900 min(40vw,220px)/1 system-ui,sans-serif;color:#fff;text-shadow:0 4px 30px rgba(0,0,0,.7);animation:recpop 1s ease-out infinite}
+@keyframes recpop{0%{transform:scale(1.25);opacity:.4}25%{transform:scale(1);opacity:1}100%{opacity:.9}}
+#recOv .recbar{pointer-events:auto;position:fixed;left:max(12px,env(safe-area-inset-left,0px));right:max(12px,env(safe-area-inset-right,0px));bottom:calc(env(safe-area-inset-bottom,0px) + 96px);background:var(--panel);color:var(--fg);border-radius:16px;padding:12px 14px;display:flex;align-items:center;gap:10px;box-shadow:0 8px 28px rgba(0,0,0,.45)}
+#recOv .recbar button{padding:10px 18px}#recOv .recbar span:first-child{flex:none}
+.recdot{width:12px;height:12px;border-radius:50%;background:#e5383b;animation:recblink 1s infinite}@keyframes recblink{50%{opacity:.2}}
+.rectime{font:700 18px ui-monospace,monospace;min-width:72px}.recmeter{flex:1;height:8px;border-radius:4px;background:rgba(127,127,127,.3);overflow:hidden}.recmeter i{display:block;height:100%;width:0;background:#38d27a;transition:width .1s}
 #pickBar{position:fixed;left:max(12px,env(safe-area-inset-left,0px));right:max(12px,env(safe-area-inset-right,0px));bottom:calc(env(safe-area-inset-bottom,0px) + 96px);z-index:50;background:var(--panel);color:var(--fg);border-radius:16px;padding:12px 14px;display:flex;flex-direction:column;gap:8px;box-shadow:0 8px 28px rgba(0,0,0,.45);font-size:14px}
 #pickBar[hidden]{display:none}#pickBar b{font-size:17px}#pickBar .pbb{display:flex;gap:8px}#pickBar .pbb button{flex:1;padding:10px}
 .eg{width:100%;height:60px;display:block}.egbig{position:absolute;inset:0;width:100%;height:100%}
@@ -1017,11 +1025,11 @@ const SFX_DEF=[
   ['pon','その他','ポン',.3,(o,d)=>{const s=osc(o,'sine',650);s.frequency.exponentialRampToValueAtTime(280,.12);chain(s,env(o,0,.003,.8,.14),d);s.start()}],
 ];
 async function buildSfx(){if(sfxBuilt)return;sfxBuilt=true;
-  const keys=await IDB.keys();for(const k of keys||[]){if(!String(k).startsWith('sfx:'))continue;const v=await IDB.get(k);if(!v)continue;try{const buf=await actx.decodeAudioData(v.data.slice(0));SFX.push({id:k,cat:'マイ効果音',name:v.name,buf})}catch(e){}}
+  const keys=await IDB.keys();for(const k of keys||[]){if(!String(k).startsWith('sfx:'))continue;const v=await IDB.get(k);if(!v)continue;try{const buf=await actx.decodeAudioData(v.data.slice(0));SFX.push({id:k,cat:v.cat||'マイ効果音',name:v.name,buf})}catch(e){}}
   if(S.panel==='sfx')renderPanel();req();
 }
 const sfxById=id=>SFX.find(x=>x.id===id);
-function playBuf(buf,when=0,vol=1){if(!actx||!buf)return;const s=actx.createBufferSource(),g=actx.createGain();s.buffer=buf;g.gain.value=vol;s.connect(g);g.connect(sfxG);s.start(actx.currentTime+when);return s}
+function playBuf(buf,when=0,vol=1){if(!actx||!buf)return;const s=actx.createBufferSource(),g=actx.createGain();s.buffer=buf;g.gain.value=vol;s.connect(g);g.connect(sfxG);s.start(actx.currentTime+when);if(buf.duration>1&&typeof LIVE_SFX!=='undefined')LIVE_SFX.push(s);return s}
 const bgmEnd=()=>S.bgmClip.t+(S.bgmClip.len??Math.max(.5,tlDur-S.bgmClip.t));
 function startBgm(tl){stopBgm();if(!bgm||!actx)return;const c=S.bgmClip,end=bgmEnd();if(tl>=end)return;
   const s=actx.createBufferSource();s.buffer=bgm.buf;s.loop=true;const g=actx.createGain();s.connect(g);g.connect(bgmG);
@@ -1158,10 +1166,10 @@ function tick(){if(!S.playing||PB.wait)return;if(PB.mode==='nat')return natTick(
   fireSfx(lastTl,t);lastTl=t;S.tl=t;dirty=true}
 function advance(t){fireSfx(lastTl,t);lastTl=t;S.tl=t;dirty=true;if(t>=tlDur-1e-3){S.tl=tlDur;finishPlay();return}enterAt(t+1e-4)}
 function finishPlay(){pause();if(exporting&&exporting.done)exporting.done()}
-async function play(){if(tlDur<=0)return;ensureAudio();if(S.tl>=tlDur-.05)S.tl=0;S.playing=true;lastTl=S.tl;setPlayIco();
+async function play(){if(tlDur<=0)return;ensureAudio();if(S.tl>=tlDur-.05)S.tl=0;S.playing=true;lastTl=S.tl;setPlayIco();stopLiveSfx();startMidSfx(S.tl);
   if(typeof NP!=='undefined'&&NP.on&&NP.ready&&!exporting){pauseAll(null);PB.mode='nat';PB.nt0=S.tl;PB.n0=performance.now();PB.sync=0;const t0=S.tl;nat('playerPlay',{t:t0}).then(r=>{if(PB.mode==='nat'){PB.nt0=r.t;PB.n0=performance.now()}}).catch(()=>{});startBgm(S.tl);return}
   if(wcReady()){if(actx.state!=='running')try{await actx.resume()}catch(e){}wcStart(S.tl);startBgm(S.tl);return}await enterAt(S.tl,true);startBgm(S.tl)}
-function pause(){S.playing=false;PB.wait=false;PB.pre=null;wcStop();if(PB.mode==='nat'){nat('playerPause').catch(()=>{})}if(PB.mode==='wc'||PB.mode==='nat')PB.mode=null;pauseAll(null);for(const k in SRC)for(const e of SRC[k].els||[])elGain(e,1);stopBgm();setPlayIco();req()}
+function pause(){S.playing=false;stopLiveSfx();PB.wait=false;PB.pre=null;wcStop();if(PB.mode==='nat'){nat('playerPause').catch(()=>{})}if(PB.mode==='wc'||PB.mode==='nat')PB.mode=null;pauseAll(null);for(const k in SRC)for(const e of SRC[k].els||[])elGain(e,1);stopBgm();setPlayIco();req()}
 function setPlayIco(){const p=S.playing?'<path d="M7 4h4v16H7zM14 4h4v16h-4z"/>':'<path d="M7 4v16l13-8z"/>';$('#playIco').innerHTML=p;$('#fsIco').innerHTML=p}
 function seekPreview(){if(typeof NP!=='undefined'&&NP.on)nat('playerSeek',{t:S.tl}).catch(()=>{});const p=pieceAt(S.tl);if(p){const rt=SRC[p.src];if(rt&&rt.kind==='video')rt.player.currentTime=p.s+(S.tl-p.t)}req()}
 
@@ -1179,6 +1187,7 @@ function select(sel){S.sel=sel;req();if(!S.panel)return;const p=panelFor(sel);
   if((S.panel==='edit'||S.panel==='img')&&(p==='edit'||p==='img')){openPanel(p,true);return}
   renderPanel()}
 const ICONS={
+  rec:'<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/><circle cx="19" cy="5" r="2" fill="currentColor"/>',
   track:'<rect x="6" y="6" width="12" height="12" rx="2" stroke-dasharray="3 2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="2"/>',
   kf:'<path d="M12 3l7 9-7 9-7-9z"/>',
   fxset:'<rect x="6" y="6" width="12" height="12" rx="2" stroke-dasharray="3 2"/><circle cx="12" cy="12" r="2"/>',
@@ -1202,7 +1211,7 @@ const ICONS={
   caplist:'<path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/>',check:'<path d="m5 12 5 5 9-10"/>',expand:'<path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/>',
   none:'<circle cx="12" cy="12" r="8"/><path d="M6.5 17.5l11-11"/>',
 };
-const MAIN_TOOLS=[['split','分割'],['sil','無音カット'],['voice','音声補正'],['cap','字幕'],['text','テキスト'],['asset','素材'],['track','追従'],['sfx','効果音'],['bgm','BGM'],['layout','縦配置'],['tpl','テンプレ']];
+const MAIN_TOOLS=[['split','分割'],['sil','無音カット'],['voice','音声補正'],['cap','字幕'],['text','テキスト'],['asset','素材'],['track','追従'],['rec','録音'],['sfx','効果音'],['bgm','BGM'],['layout','縦配置'],['tpl','テンプレ']];
 let toolsKey=null;
 function renderTools(){const sel=S.sel,it=selItem();const key=sel&&it&&sel.kind!=='layer'?sel.kind+':'+sel.id+':'+(sel.kind==='seg'&&it.gap>0?1:0)+(sel.kind==='ov'?it.type:''):'main';if(key===toolsKey)return;toolsKey=key;
   const el=$('#tools');
@@ -1799,9 +1808,56 @@ document.addEventListener('pointerdown',e=>{const hd=e.target.closest('.eghandle
     sheet.querySelectorAll('[data-f^="kfbz."]').forEach(inp=>inp.value=(+k.bz[+inp.dataset.f.slice(5)]).toFixed(2));req()};
   const end=()=>{document.removeEventListener('pointermove',mv);document.removeEventListener('pointerup',end);autosave();renderPanel()};
   document.addEventListener('pointermove',mv);document.addEventListener('pointerup',end)});
+/* ================= 録音（再生位置から声を録って、そのままタイムラインに置く） ================= */
+const REC={state:'idle',t0:0,start:0,timer:null,cd:null,web:null,chunks:[],stream:null,meter:0,mutedVol:null};
+const LIVE_SFX=[];
+function startMidSfx(tl){if(!actx)return;for(const x of S.sfx){const b=sfxById(x.snd)?.buf;if(!b)continue;if(x.t<tl-1e-3&&x.t+b.duration>tl+.05){const s=actx.createBufferSource(),g=actx.createGain();s.buffer=b;g.gain.value=x.vol??1;s.connect(g);g.connect(sfxG);s.start(actx.currentTime,tl-x.t);LIVE_SFX.push(s)}}}
+function stopLiveSfx(){for(const s of LIVE_SFX)try{s.stop()}catch(e){}LIVE_SFX.length=0}
+function recSec(){const cd=S.ui.recCd??3,pb=S.ui.recPlay??true;
+  let h=shTop('録音');
+  if(REC.state!=='idle')return h+`<p class="hint">録音中です。画面下の「停止」で止めると、録音を始めた位置に音声が入ります。</p>`;
+  h+=`<div class="row"><label>カウントダウン</label><span class="seg">${[[0,'なし'],[3,'3秒'],[5,'5秒']].map(([v,l])=>`<button data-act="reccd" data-v="${v}" class="${cd===v?'on':''}">${l}</button>`).join('')}</span></div>
+    <label class="allsw"><input type="checkbox" data-f="recPlay" ${pb?'checked':''}>録音中に動画を再生して音も流す</label>
+    <p class="hint">スピーカーで動画の音を流すと、その音も一緒に録音されます。イヤホンを使うか、このチェックを外すと動画は音なしで再生されます。</p>
+    <div class="row"><button class="pri rec" data-act="recgo">● 再生位置（${fmt(S.tl)}）から録音</button></div>
+    <p class="hint">止めると、録音を始めた位置の効果音トラック（A2）に音声が入ります。あとから位置・音量の変更や削除ができます。</p>`;
+  return h}
+const recOv=document.createElement('div');recOv.id='recOv';recOv.hidden=true;document.body.appendChild(recOv);
+function recUI(){if(REC.state==='idle'){recOv.hidden=true;return}recOv.hidden=false;
+  if(REC.state==='count')recOv.innerHTML=`<div class="recnum">${REC.cd}</div><div class="recbar"><span>まもなく録音が始まります</span><button data-rk="cancel">やめる</button></div>`;
+  else if(REC.state==='rec')recOv.innerHTML=`<div class="recbar"><span class="recdot"></span><span class="rectime" id="recTime">0:00.0</span><span class="recmeter"><i id="recMeter"></i></span><button data-rk="stop" class="pri">■ 停止</button></div>`;
+  else recOv.innerHTML=`<div class="recbar"><span>音声を入れています…</span></div>`}
+recOv.addEventListener('click',e=>{const b=e.target.closest('[data-rk]');if(!b)return;if(b.dataset.rk==='stop')recStop(false);else recStop(true)});
+async function recGo(){if(REC.state!=='idle')return;if(tlDur<=0){toast('先に動画を入れてください');return}ensureAudio();pause();REC.t0=S.tl;openPanel(null);
+  const cd=S.ui.recCd??3;if(cd>0){REC.state='count';REC.cd=cd;recUI();for(let i=cd;i>0;i--){REC.cd=i;recUI();buzz(10);await new Promise(r=>setTimeout(r,1000));if(REC.state!=='count')return}}
+  REC.state='starting';recUI();
+  try{if(NATIVE){await nat('recStart',{})}
+    else{if(!navigator.mediaDevices||!window.MediaRecorder)throw new Error('この環境では録音できません');
+      REC.stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
+      REC.chunks=[];REC.web=new MediaRecorder(REC.stream);REC.web.ondataavailable=e=>{if(e.data&&e.data.size)REC.chunks.push(e.data)};REC.web.start(250)}}
+  catch(e){REC.state='idle';recUI();toast('録音を開始できません：'+(e&&e.message||e));openPanel('rec');return}
+  REC.state='rec';REC.start=performance.now();recUI();
+  if(S.ui.recPlay??true){S.tl=REC.t0;play()}else{REC.mutedVol=S.audio.orig;S.audio.orig=0;applyVol&&applyVol();S.tl=REC.t0;play()}
+  REC.timer=setInterval(async()=>{const t=(performance.now()-REC.start)/1000;const el=$('#recTime');if(el)el.textContent=fmt(t);
+    let lv=0;if(NATIVE){try{const r=await nat('recLevel',{});lv=clamp((r.db+60)/60,0,1)}catch(e){}}else lv=.4+.2*Math.random();const m=$('#recMeter');if(m)m.style.width=Math.round(lv*100)+'%';
+    if(!S.playing&&REC.t0+t>=tlDur-.05&&REC.state==='rec')recStop(false)},120)}
+async function recStop(cancel){if(REC.state==='idle')return;const was=REC.state;REC.state=cancel?'idle':'saving';clearInterval(REC.timer);recUI();if(S.playing)pause();
+  if(REC.mutedVol!=null){S.audio.orig=REC.mutedVol;REC.mutedVol=null;applyVol&&applyVol()}
+  if(was==='count'){REC.state='idle';recUI();openPanel('rec');return}
+  let data=null,dur=(performance.now()-REC.start)/1000;
+  try{if(NATIVE){const r=await nat('recStop',{cancel:!!cancel});if(!cancel&&r&&r.name){const u=await nat('resolveMedia',{name:r.name});data=await (await fetch(u.url)).arrayBuffer();nat('deleteMedia',{name:r.name}).catch(()=>{})}}
+    else if(REC.web){const stopped=new Promise(r=>REC.web.onstop=r);REC.web.stop();await stopped;for(const t of REC.stream.getTracks())t.stop();if(!cancel)data=await new Blob(REC.chunks,{type:REC.web.mimeType||'audio/webm'}).arrayBuffer();REC.web=null;REC.stream=null}}
+  catch(e){REC.state='idle';recUI();toast('録音を保存できません：'+(e&&e.message||e));return}
+  if(cancel||!data){REC.state='idle';recUI();return}
+  try{const buf=await actx.decodeAudioData(data.slice(0));const n=SFX.filter(x=>x.cat==='録音').length+1,name=`録音 ${n}`,id='sfx:'+uid('');
+    await IDB.set(id,{name,data,cat:'録音'});SFX.push({id,cat:'録音',name,buf});
+    pushUndo();const x={id:uid('s'),t:REC.t0,snd:id,vol:1};S.sfx.push(x);S.sel={kind:'sfx',id:x.id};toolsKey=null;S.tl=REC.t0+buf.duration;seekPreview();
+    autosave();fitTl&&fitTl();req();toast(`${fmt(buf.duration)}の音声を入れました`)}
+  catch(e){toast('録音の読み込みに失敗しました')}
+  REC.state='idle';recUI()}
 
 /* ================= パネル（下から出るシート） ================= */
-const PANELS={voice:{mode:'dock'},adj:{mode:'dock'},cut:{mode:'dock'},sil:{mode:'dock'},bgm:{mode:'dock'},cap:{mode:'full'},track:{mode:'full'},edit:{mode:'full'},img:{mode:'full'},sfx:{mode:'full'},layout:{mode:'full'},tpl:{mode:'full'},exp:{mode:'full'}};
+const PANELS={voice:{mode:'dock'},adj:{mode:'dock'},cut:{mode:'dock'},sil:{mode:'dock'},bgm:{mode:'dock'},cap:{mode:'full'},track:{mode:'full'},rec:{mode:'dock'},edit:{mode:'full'},img:{mode:'full'},sfx:{mode:'full'},layout:{mode:'full'},tpl:{mode:'full'},exp:{mode:'full'}};
 const sheet=$('#sheet');
 function openPanel(k,keep){if(k&&!PANELS[k])return;const prev=S.panel;S.panel=k;if(k==='cap'&&prev!=='cap')bulkInit();$('#addMenu').hidden=true;S.ui.cpath=null;cpop.hidden=true;
   if(k==='sil')silPreview=detectSilence();
@@ -2016,6 +2072,7 @@ function capTl(c){const t=srcToTl(c.src,c.s);if(t!=null)return t;const r=srcRang
 function renderPanel(fresh){const k=S.panel;if(!k)return;const keep=!fresh&&sheet.dataset.p===k?sheet.scrollTop:0;let h='';
   if(k==='edit')h=renderEdit();
   if(k==='track')h=fxSec();
+  if(k==='rec')h=recSec();
   if(k==='img')h=renderImg();
   if(k==='voice'){const A=S.audio,seg=(n,opts)=>`<span class="seg">${opts.map(([v,l])=>`<button data-act="vfx" data-k="${n}" data-v="${v}" class="${String(A[n])===String(v)?'on':''}">${l}</button>`).join('')}</span>`;
     h=shTop('音声補正',NATIVE?'':'<span class="badge">アプリ版で使えます</span>')+
@@ -2127,6 +2184,7 @@ sheet.addEventListener('input',e=>{const el=e.target;
   const f=el.dataset.f;if(!f)return;
   if(f==='applyAll'){S.ui.applyAll=val;return}
   if(f==='expAlpha'){S.ui.expAlpha=val;return}
+  if(f==='recPlay'){S.ui.recPlay=val;return}
   if(f.startsWith('sil.')){S.sil[f.slice(4)]=val;silPreview=detectSilence();const tot=(silPreview||[]).reduce((a,r)=>a+r.b-r.a,0);const i=$('#silInfo');if(i)i.textContent=`${(silPreview||[]).length}か所・${tot.toFixed(1)}秒をカット`;const b=sheet.querySelector('[data-act=silapply]');if(b)b.disabled=!(silPreview||[]).length;req();return}
   if(f.startsWith('split.')){S.split[f.slice(6)]=val;return}
   if(f.startsWith('fx.')){const k=f.slice(3),it=selItem();if(isFx(it)){it[k]=k==='color'?val:k==='pad'?+val/100:+val;autosave()}else fxNew()[k]=k==='color'?val:+val;req();return}
@@ -2209,6 +2267,8 @@ sheet.addEventListener('click',async e=>{
     spktpl:()=>{const i=S.ui.spkPick;if(i==null)return;pushUndo();const cfg=spkCfg();cfg.tpl[i]=v;let n=0;for(const c of S.captions)if(c.spk===i&&applySpk(c))n++;req();autosave();renderPanel();toast(`${spkName(i)}の字幕${n}個に反映しました`)},
     spkre:()=>{pushUndo();let n=0;for(const c of S.captions)if(applySpk(c))n++;req();autosave();renderPanel();toast(`${n}個の字幕に反映しました`)},
     spkset:()=>{const it=selItem();if(!it)return;pushUndo();it.spk=+v;applySpk(it);req();autosave();renderPanel();drawTl&&drawTl()},
+    reccd:()=>{S.ui.recCd=+v;renderPanel()},
+    recgo:()=>recGo(),
     fxtarget:()=>{fxNew().target=v;renderPanel()},
     fxkind:()=>{const it=selItem();if(isFx(it)){if(v==='image'&&!it.dataUrl){fxPickImage();return}pushUndo();it.kind=v;autosave();req()}else fxNew().kind=v;renderPanel()},
     fxshape:()=>{const it=selItem();if(isFx(it)){pushUndo();it.shape=v;autosave();req()}else fxNew().shape=v;renderPanel()},

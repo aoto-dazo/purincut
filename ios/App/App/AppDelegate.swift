@@ -99,7 +99,10 @@ public class PurinNativePlugin: CAPPlugin, CAPBridgedPlugin, PHPickerViewControl
         CAPPluginMethod(name: "trackFx", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "trackFxStatus", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "trackFxCancel", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "detectFx", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "detectFx", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "recStart", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "recLevel", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "recStop", returnType: CAPPluginReturnPromise)
     ]
     var fxProgress: [String: Double] = [:]
     var diarState: [String: [String: Any]] = [:]
@@ -1457,6 +1460,68 @@ extension PurinNativePlugin {
             } else {
                 call.resolve(["box": NSNull(), "count": boxes.count])
             }
+        }
+    }
+}
+
+
+// MARK: 録音（マイクの声をタイムラインに入れる）
+final class PurinRecorder {
+    static var rec: AVAudioRecorder?
+    static var url: URL?
+    static var prevCategory: AVAudioSession.Category = .soloAmbient
+    static var prevMode: AVAudioSession.Mode = .default
+    static var prevOptions: AVAudioSession.CategoryOptions = []
+}
+
+extension PurinNativePlugin {
+    @objc func recStart(_ call: CAPPluginCall) {
+        AVAudioApplication.requestRecordPermission { ok in
+            guard ok else { call.reject("マイクの使用が許可されていません（設定アプリ → ぷりんCut → マイク）"); return }
+            DispatchQueue.main.async {
+                do {
+                    let ses = AVAudioSession.sharedInstance()
+                    PurinRecorder.prevCategory = ses.category; PurinRecorder.prevMode = ses.mode; PurinRecorder.prevOptions = ses.categoryOptions
+                    try ses.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetooth, .allowBluetoothA2DP])
+                    try ses.setActive(true)
+                    let url = purinTmpURL("rec_\(Int(Date().timeIntervalSince1970 * 1000)).m4a")
+                    try? FileManager.default.removeItem(at: url)
+                    let settings: [String: Any] = [AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 48000, AVNumberOfChannelsKey: 1,
+                                                   AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue, AVEncoderBitRateKey: 128000]
+                    let r = try AVAudioRecorder(url: url, settings: settings)
+                    r.isMeteringEnabled = true
+                    guard r.prepareToRecord(), r.record() else { throw NSError(domain: "purin", code: 40, userInfo: [NSLocalizedDescriptionKey: "録音を開始できません"]) }
+                    PurinRecorder.rec = r; PurinRecorder.url = url
+                    call.resolve(["ok": true])
+                } catch {
+                    call.reject("録音を開始できません: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    @objc func recLevel(_ call: CAPPluginCall) {
+        guard let r = PurinRecorder.rec else { call.resolve(["db": -160, "t": 0]); return }
+        r.updateMeters()
+        call.resolve(["db": Double(r.averagePower(forChannel: 0)), "peak": Double(r.peakPower(forChannel: 0)), "t": r.currentTime])
+    }
+
+    /// 録音を止めて、ファイルを素材フォルダに移して名前を返す（cancel=true なら捨てる）
+    @objc func recStop(_ call: CAPPluginCall) {
+        let cancel = call.getBool("cancel") ?? false
+        DispatchQueue.main.async {
+            guard let r = PurinRecorder.rec, let url = PurinRecorder.url else { call.reject("録音していません"); return }
+            let dur = r.currentTime
+            r.stop()
+            PurinRecorder.rec = nil; PurinRecorder.url = nil
+            let ses = AVAudioSession.sharedInstance()
+            try? ses.setCategory(PurinRecorder.prevCategory, mode: PurinRecorder.prevMode, options: PurinRecorder.prevOptions)
+            if cancel { try? FileManager.default.removeItem(at: url); call.resolve(["canceled": true]); return }
+            let name = url.lastPathComponent
+            let dst = self.mediaFileURL(name)
+            try? FileManager.default.removeItem(at: dst)
+            do { try FileManager.default.moveItem(at: url, to: dst) } catch { call.reject("録音を保存できません: \(error.localizedDescription)"); return }
+            call.resolve(["name": name, "duration": dur])
         }
     }
 }
