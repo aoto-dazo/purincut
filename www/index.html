@@ -1326,6 +1326,10 @@ function fitTl(){buildRows();const d=Math.min(2,devicePixelRatio||1);const w=tlc
   if(tlc.width!==Math.round(w*d)||tlc.height!==Math.round(h*d)){tlc.width=Math.round(w*d);tlc.height=Math.round(h*d)}clampTlY();req()}
 const tlX=(t,w)=>HDR+(w-HDR)/2+(t-S.tl)*S.zoom;
 const tlT=(x,w)=>S.tl+(x-HDR-(w-HDR)/2)/S.zoom;
+// 音声の波形（1秒あたり100点の最大値）。一度計算したら覚えておく
+const PEAKS=new WeakMap();
+function bufPeaks(buf){let p=PEAKS.get(buf);if(p)return p;const n=Math.ceil(buf.duration*100),out=new Float32Array(n),chs=[];for(let c=0;c<buf.numberOfChannels;c++)chs.push(buf.getChannelData(c));const step=buf.sampleRate/100;
+  for(let i=0;i<n;i++){let m=0;const a=Math.floor(i*step),b=Math.min(buf.length,Math.floor((i+1)*step));for(const d of chs)for(let j=a;j<b;j+=3){const v=Math.abs(d[j]);if(v>m)m=v}out[i]=m}PEAKS.set(buf,out);return out}
 function clipsOf(row){const out=[];
   if(row.k==='cap')for(const c of S.captions){const r=srcRangeToTl(c.src,c.s,c.e);if(r.length)out.push({kind:'cap',id:c.id,t0:r[0][0],t1:r[r.length-1][1],label:c.text})}
   if(row.k==='ov')for(const o of S.overlays){if((o.track||2)!==row.n)continue;out.push({kind:'ov',id:o.id,t0:o.t,t1:o.t+o.d,label:o.type==='fx'?'追従・'+fxName(o):o.type==='img'?'画像':o.text})}
@@ -1364,6 +1368,10 @@ function drawTl(){
       continue}
     for(const c of clipsOf(row)){const sel=isSel(c),col=C(COLORS[c.kind]);let x0=X(c.t0),x1=Math.max(X(c.t1),x0+(c.minPx||3));if(x1<HDR||x0>w)continue;
       tx.fillStyle=sel?col:hexA(col,.42);rr(x0,y,Math.max(2,x1-x0-1),row.h,4);tx.fill();
+      if(c.kind==='sfx'||c.kind==='bgm'){let buf,base,vol=1;if(c.kind==='sfx'){const x=S.sfx.find(q=>q.id===c.id);buf=x&&sfxById(x.snd)?.buf;base=x&&x.t;vol=x?.vol??1}else{buf=bgm&&bgm.buf;base=S.bgmClip.t}
+        if(buf){const pk=bufPeaks(buf),dur=buf.duration,mid=y+row.h/2,span=Math.max(1,Math.ceil(100/pps)),off=c.kind==='bgm'?(S.bgmClip.offset||0):0;tx.fillStyle=sel?'rgba(255,255,255,.95)':'rgba(255,255,255,.7)';
+          for(let px=Math.max(HDR,Math.floor(x0+1));px<Math.min(w,Math.ceil(x1-1));px++){let tt=off+tlT(px,w)-base;if(c.kind==='bgm')tt=((tt%dur)+dur)%dur;if(tt<0||tt>dur)continue;const i0=Math.floor(tt*100);let m=0;for(let j=0;j<span;j++){const v=pk[i0+j]||0;if(v>m)m=v}
+            const hh=Math.max(.5,Math.min(1,m*1.6*Math.min(1.5,vol))*(row.h/2-3));tx.fillRect(px,mid-hh,1,hh*2)}}}
       if(c.kind==='ov'){const ov=S.overlays.find(o=>o.id===c.id);if(ov&&ov.kf&&ov.kf.length){const cy=y+row.h/2,r=Math.min(6,row.h/3);for(const k of ov.kf){const kx=X(ov.t+k.t);if(kx<HDR||kx>w)continue;tx.fillStyle=k.id===S.ui.kfSel&&sel?'#ffd23f':'#ffffff';tx.strokeStyle='rgba(0,0,0,.55)';tx.lineWidth=1;tx.beginPath();tx.moveTo(kx,cy-r);tx.lineTo(kx+r,cy);tx.lineTo(kx,cy+r);tx.lineTo(kx-r,cy);tx.closePath();tx.fill();tx.stroke()}}}
       if(c.kind==='cap'){const cp=capById(c.id);if(cp&&cp.spk!=null&&S.spk&&S.spk.n){tx.fillStyle=SPK_COL[cp.spk%SPK_COL.length];tx.fillRect(x0+2,y+row.h-4,Math.max(2,x1-x0-5),3)}}
       if(sel){tx.save();if(tp.lifted){tx.shadowColor='rgba(255,210,63,.9)';tx.shadowBlur=10}tx.strokeStyle=tp.lifted?C('--accent'):C('--fg');tx.lineWidth=tp.lifted?2.5:1.5;tx.stroke();tx.restore();if(c.kind!=='sfx'){tx.fillStyle=C('--fg');tx.fillRect(x0+1,y+3,3,row.h-6);tx.fillRect(x1-5,y+3,3,row.h-6)}}
