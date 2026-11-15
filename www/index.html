@@ -1640,14 +1640,16 @@ function fxBoxesAt(o,x){const k=o.keys;if(!k||!k.length)return[];const n=k.lengt
   let lo=0,hi=n;while(hi-lo>1){const mi=(lo+hi)>>1;if(k[mi][0]<=x)lo=mi;else hi=mi}
   const a=k[lo],b=k[hi];if(b[0]-a[0]>.6||a[1].length!==b[1].length)return(x-a[0]<b[0]-x)?a[1]:b[1];
   const u=(x-a[0])/Math.max(1e-6,b[0]-a[0]);return a[1].map((p,i)=>{const q=b[1][i];return p.map((v,j)=>v+(q[j]-v)*u)})}
+// 追従後に調整した位置・大きさ（ox・oyは元の枠の幅・高さに対する割合、scは倍率）
+const fxAdj=(o,b)=>{const sc=o.sc??1,w=b[2]*sc,h=b[3]*sc;return[b[0]+b[2]/2+(o.ox||0)*b[2]-w/2,b[1]+b[3]/2+(o.oy||0)*b[3]-h/2,w,h]};
 const padBox=(b,pad)=>{const pw=b[2]*pad,ph=b[3]*pad;return[b[0]-pw/2,b[1]-ph/2,b[2]+pw,b[3]+ph]};
 const fxTmp=document.createElement('canvas'),fxTmpX=fxTmp.getContext('2d');
 // Web版の描画（アプリ版はiPhoneの映像エンジンで描く）。選択用の枠もここで作る
 function drawFxLayer(ctx,tl,preview,natV,rs){const act=S.overlays.filter(o=>isFx(o)&&tl>=o.t&&tl<o.t+o.d);if(!act.length)return;
   const m=layerMaps(tl);if(!m)return;
   for(const o of act){if(o.src!==m.sa.src)continue;const bs=o.kind==='cutout'&&o.mode==='all'?[[0,0,1,1]]:fxBoxesAt(o,m.sa.x);let hit=null;
-    for(const r of m.maps)for(const b0 of bs){const f=boxToFrame(r,m,o.kind==='cutout'?b0:padBox(b0,o.pad||0));
-      if(!hit)hit=f;
+    for(const r of m.maps)for(const b0 of bs){const ba=o.kind==='cutout'?b0:fxAdj(o,b0),f=boxToFrame(r,m,o.kind==='cutout'?b0:padBox(ba,o.pad||0));
+      if(!hit){hit=f;const u=boxToFrame(r,m,b0);hit.bw=u.w;hit.bh=u.h}
       if(natV||o.kind==='cutout')continue;
       ctx.save();ctx.beginPath();ctx.rect(r.x,r.y,r.dw,r.dh);ctx.clip();
       if(o.kind!=='image'){ctx.beginPath();if(o.shape==='ellipse')ctx.ellipse(f.x+f.w/2,f.y+f.h/2,Math.max(1,f.w/2),Math.max(1,f.h/2),0,0,7);else ctx.rect(f.x,f.y,f.w,f.h);ctx.clip()}
@@ -1658,7 +1660,7 @@ function drawFxLayer(ctx,tl,preview,natV,rs){const act=S.overlays.filter(o=>isFx
         fxTmp.width=tw;fxTmp.height=th;fxTmpX.imageSmoothingEnabled=true;fxTmpX.drawImage(ctx.canvas,dx,dy,dw,dh,0,0,tw,th);
         ctx.imageSmoothingEnabled=blur;ctx.setTransform(1,0,0,1,0,0);ctx.drawImage(fxTmp,0,0,tw,th,dx,dy,dw,dh);ctx.imageSmoothingEnabled=true}
       ctx.restore();ctx.setTransform(rs,0,0,rs,0,0)}
-    if(preview){const f=hit||{x:LW*.3,y:LH*.3,w:LW*.4,h:LH*.4};boxes.push({kind:'ov',id:o.id,cx:f.x+f.w/2,cy:f.y+f.h/2,hw:f.w/2,hh:f.h/2,rot:0,fx:true})}}}
+    if(preview){const f=hit||{x:LW*.3,y:LH*.3,w:LW*.4,h:LH*.4};boxes.push({kind:'ov',id:o.id,cx:f.x+f.w/2,cy:f.y+f.h/2,hw:f.w/2,hh:f.h/2,rot:0,fx:o.kind!=='cutout',bw:f.bw||f.w,bh:f.bh||f.h})}}}
 // 顔のタップ・範囲を囲むときの表示
 function fxPickOverlay(ctx){if(PICK.confirm){const c=PICK.confirm,m=layerMaps(S.tl);if(!m||!c.box)return;const b=c.target==='box'?c.box:padBox(c.box,.2);
     ctx.save();const fs=m.maps.map(r=>boxToFrame(r,m,b));ctx.beginPath();ctx.rect(0,0,LW,LH);for(const f of fs)ctx.rect(f.x,f.y,f.w,f.h);ctx.fillStyle='rgba(0,0,0,.62)';ctx.fill('evenodd');
@@ -1717,11 +1719,11 @@ async function runTrack(target,pt,rect,redoId){const d=fxNew();const sa=srcAt(S.
 function fxForNative(){const out=[];for(const o of S.overlays){if(!isFx(o))continue;
   for(const p of eff){if(p.src!==o.src)continue;const a=Math.max(o.t,p.t),b=Math.min(o.t+o.d,p.t+plen(p));if(b-a<.001)continue;
     const s0=p.s+(a-p.t),s1=p.s+(b-p.t);const keys=(o.keys||[]).filter(k=>k[0]>=s0-.3&&k[0]<=s1+.3).map(k=>[+(p.t+(k[0]-p.s)).toFixed(4),k[1]]);
-    out.push({t0:a,t1:b,kind:o.kind,mode:o.mode||'',strength:o.strength||50,color:o.color||'#ffffff',shape:o.shape||'rect',pad:o.pad||0,bg:o.bg||'',img:o.nat||null,keys})}}return out}
-function fxPickImage(){const inp=document.createElement('input');inp.type='file';inp.accept='image/*';inp.onchange=async()=>{const f=inp.files&&inp.files[0];if(!f)return;
+    out.push({t0:a,t1:b,kind:o.kind,mode:o.mode||'',strength:o.strength||50,color:o.color||'#ffffff',shape:o.shape||'rect',pad:o.pad||0,ox:o.ox||0,oy:o.oy||0,sc:o.sc??1,bg:o.bg||'',img:o.nat||null,keys})}}return out}
+function fxPickImage(){const inp=document.createElement('input');inp.type='file';inp.accept='image/*';inp.style.display='none';document.body.appendChild(inp);inp.onchange=async()=>{const f=inp.files&&inp.files[0];inp.remove();if(!f)return;
   const dataUrl=await new Promise(r=>{const fr=new FileReader();fr.onload=()=>r(fr.result);fr.readAsDataURL(f)});let natName=null;
   if(NATIVE){try{const ext=((f.name||'').match(/\.[a-z0-9]+$/i)||['.png'])[0];const r=await natImportFile(f,'fx'+Date.now().toString(36)+ext);natName=r.name}catch(e){toast('画像を保存できませんでした');return}}
-  const it=selItem();if(isFx(it)){pushUndo();it.nat=natName;it.dataUrl=dataUrl;it.kind='image';loadImg(it);autosave()}else{const d=fxNew();d.img={nat:natName,dataUrl};d.kind='image'}
+  const it=selItem();if(isFx(it)){pushUndo();it.nat=natName;it.dataUrl=dataUrl;it.kind='image';it.img=null;it._ac=null;loadImg(it);autosave();toast('画像を変更しました')}else{const d=fxNew();d.img={nat:natName,dataUrl};d.kind='image'}
   renderPanel();req()};inp.click()}
 function fxSec(){const it=selItem(),sel=isFx(it)?it:null,d=fxNew(),c=sel||{kind:d.kind,strength:d.strength,color:d.color,shape:d.shape,pad:d.pad/100,bg:d.bg};
   let h=shTop(sel?'追従：'+fxName(sel):'追従（モザイク・切り抜き）',sel?`<span class="badge">${fmt(sel.t)}〜${fmt(sel.t+sel.d)}</span>`:'');
@@ -1736,7 +1738,9 @@ function fxSec(){const it=selItem(),sel=isFx(it)?it:null,d=fxNew(),c=sel||{kind:
     if(c.kind==='fill')h+=`<label class="field"><span>色</span><input type="color" data-f="fx.color" value="${c.color||'#ffffff'}"></label>`;
     if(c.kind==='image')h+=`<div class="row"><button data-act="fximg">画像を選ぶ</button>${(sel?sel.dataUrl:d.img&&d.img.dataUrl)?`<img src="${sel?sel.dataUrl:d.img.dataUrl}" alt="" style="height:44px;border-radius:6px">`:'<span class="hint" style="margin:0">未選択</span>'}</div>`;
     if(c.kind!=='image')h+=`<div class="row"><label>形</label><span class="seg"><button data-act="fxshape" data-v="rect" class="${c.shape!=='ellipse'?'on':''}">四角</button><button data-act="fxshape" data-v="ellipse" class="${c.shape==='ellipse'?'on':''}">丸</button></span></div>`;
-    h+=rng('枠の広さ','fx.pad',0,150,1,Math.round((c.pad||0)*100),'%')}
+    h+=rng('枠の広さ','fx.pad',0,150,1,Math.round((c.pad||0)*100),'%');
+    if(sel){h+=`<div class="sheet-h4">位置と大きさ</div>`+rng('大きさ','fx.sc',20,400,1,Math.round((sel.sc??1)*100),'%')+rng('横の位置','fx.ox',-300,300,1,Math.round((sel.ox||0)*100),'%')+rng('縦の位置','fx.oy',-300,300,1,Math.round((sel.oy||0)*100),'%')+
+      `<div class="row"><button data-act="fxreset">位置と大きさを元に戻す</button></div><p class="hint">プレビューの枠を指で動かす・2本指で広げても調整できます。追従の動きはそのままで、ずらした位置に付いてきます。</p>`}}
   if(sel){h+=`<div class="row"><button data-act="fxredo">${sel.kind==='cutout'&&sel.mode==='all'?'':'選び直して追従し直す'}</button></div>`.replace('<button data-act="fxredo"></button>','')+
       `<p class="hint">タイムラインで長さを変えたり分割したりできます。プレビューの枠をタップすると選べます。</p>`}
   else h+=`<div class="row"><button class="pri" data-act="fxstart" ${FXUI.busy||!NATIVE?'disabled':''}>${d.target==='face'||d.target==='person'?'プレビューで選んで追従':d.target==='box'?'プレビューで範囲を囲む':d.target==='faces'?'全員の顔を追従':'全員を切り抜く'}</button></div>
@@ -1816,6 +1820,30 @@ document.addEventListener('pointerdown',e=>{const hd=e.target.closest('.eghandle
     sheet.querySelectorAll('[data-f^="kfbz."]').forEach(inp=>inp.value=(+k.bz[+inp.dataset.f.slice(5)]).toFixed(2));req()};
   const end=()=>{document.removeEventListener('pointermove',mv);document.removeEventListener('pointerup',end);autosave();renderPanel()};
   document.addEventListener('pointermove',mv);document.addEventListener('pointerup',end)});
+
+// 追従の枠をプレビューで直接動かす（1本指で移動、2本指で拡大縮小）
+const FXD={id:null,pts:new Map(),p0:null,o0:null,d0:0,bw:1,bh:1,pushed:false};
+(()=>{const host=pv.parentElement||document;
+  host.addEventListener('pointerdown',e=>{if(e.target!==pv||PICK.on||PICK.confirm)return;const p=pvLogical(e);
+    if(FXD.id){e.stopPropagation();e.preventDefault();FXD.pts.set(e.pointerId,p);try{pv.setPointerCapture(e.pointerId)}catch(_){}
+      if(FXD.pts.size===2){const [a,b]=[...FXD.pts.values()];FXD.d0=Math.max(10,Math.hypot(a.x-b.x,a.y-b.y));const o=S.overlays.find(x=>x.id===FXD.id);FXD.o0={ox:o.ox||0,oy:o.oy||0,sc:o.sc??1};FXD.p0={x:(a.x+b.x)/2,y:(a.y+b.y)/2}}return}
+    const cand=boxes.filter(b=>b.fx&&inBox(b,p,16*LW/pv.clientWidth));if(!cand.length)return;
+    const selHit=cand.find(b=>S.sel&&S.sel.id===b.id);if(!selHit&&boxes.some(b=>!b.fx&&b.kind!=='layer'&&b.kind!=='ov'?false:!b.fx&&b.kind==='ov'&&inBox(b,p,0)))return;
+    const b=selHit||cand[cand.length-1];const o=S.overlays.find(x=>x.id===b.id);if(!o)return;
+    e.stopPropagation();e.preventDefault();try{pv.setPointerCapture(e.pointerId)}catch(_){}
+    if(!(S.sel&&S.sel.id===o.id)){S.sel={kind:'ov',id:o.id};toolsKey=null}
+    FXD.id=o.id;FXD.pts.clear();FXD.pts.set(e.pointerId,p);FXD.p0=p;FXD.o0={ox:o.ox||0,oy:o.oy||0,sc:o.sc??1};FXD.bw=Math.max(4,b.bw);FXD.bh=Math.max(4,b.bh);FXD.pushed=false;req()},true);
+  host.addEventListener('pointermove',e=>{if(!FXD.id||!FXD.pts.has(e.pointerId))return;e.stopPropagation();const p=pvLogical(e);FXD.pts.set(e.pointerId,p);
+    const o=S.overlays.find(x=>x.id===FXD.id);if(!o)return;const pts=[...FXD.pts.values()];
+    const go=()=>{if(!FXD.pushed){pushUndo();FXD.pushed=true}};
+    if(pts.length>=2){const [a,b]=pts,d=Math.hypot(a.x-b.x,a.y-b.y),c={x:(a.x+b.x)/2,y:(a.y+b.y)/2};go();
+      o.sc=clamp(FXD.o0.sc*d/FXD.d0,.2,6);o.ox=FXD.o0.ox+(c.x-FXD.p0.x)/FXD.bw;o.oy=FXD.o0.oy+(c.y-FXD.p0.y)/FXD.bh}
+    else{const dx=p.x-FXD.p0.x,dy=p.y-FXD.p0.y;if(!FXD.pushed&&Math.hypot(dx,dy)<6*LW/pv.clientWidth)return;go();o.ox=FXD.o0.ox+dx/FXD.bw;o.oy=FXD.o0.oy+dy/FXD.bh}
+    req()},true);
+  const up=e=>{if(!FXD.id||!FXD.pts.has(e.pointerId))return;e.stopPropagation();FXD.pts.delete(e.pointerId);
+    if(FXD.pts.size===1){const o=S.overlays.find(x=>x.id===FXD.id),q=[...FXD.pts.values()][0];if(o){FXD.o0={ox:o.ox||0,oy:o.oy||0,sc:o.sc??1};FXD.p0=q}return}
+    if(!FXD.pts.size){const moved=FXD.pushed;FXD.id=null;if(moved)autosave();if(S.panel==='track'||moved)renderPanel();req()}};
+  host.addEventListener('pointerup',up,true);host.addEventListener('pointercancel',up,true)})();
 /* ================= 録音（再生位置から声を録って、そのままタイムラインに置く） ================= */
 const REC={state:'idle',t0:0,start:0,timer:null,cd:null,web:null,chunks:[],stream:null,meter:0,mutedVol:null};
 const LIVE_SFX=[];
@@ -2196,7 +2224,7 @@ sheet.addEventListener('input',e=>{const el=e.target;
   if(f==='recPlay'){S.ui.recPlay=val;return}
   if(f.startsWith('sil.')){S.sil[f.slice(4)]=val;silPreview=detectSilence();const tot=(silPreview||[]).reduce((a,r)=>a+r.b-r.a,0);const i=$('#silInfo');if(i)i.textContent=`${(silPreview||[]).length}か所・${tot.toFixed(1)}秒をカット`;const b=sheet.querySelector('[data-act=silapply]');if(b)b.disabled=!(silPreview||[]).length;req();return}
   if(f.startsWith('split.')){S.split[f.slice(6)]=val;return}
-  if(f.startsWith('fx.')){const k=f.slice(3),it=selItem();if(isFx(it)){it[k]=k==='color'?val:k==='pad'?+val/100:+val;autosave()}else fxNew()[k]=k==='color'?val:+val;req();return}
+  if(f.startsWith('fx.')){const k=f.slice(3),it=selItem(),pct=['pad','sc','ox','oy'].includes(k);if(isFx(it)){it[k]=k==='color'?val:pct?+val/100:+val;autosave()}else fxNew()[k]=k==='color'?val:+val;req();return}
   if(f.startsWith('kfbz.')){const i=+f.slice(5),it=selItem();const k=it&&it.kf&&(it.kf.find(x=>x.id===S.ui.kfSel)||it.kf.find(x=>Math.abs(x.t-(S.tl-it.t))<1/120));if(!k)return;
     if(k.ease!=='custom'){k.bz=((EASE_BY[k.ease]||EASE_BY.linear).bz||[0,0,1,1]).slice();k.ease='custom'}k.bz[i]=clamp(+val||0,i%2?-1:0,i%2?2:1);bzCache.clear();
     const pl=sheet.querySelector('.egline');if(pl){const fn=easeFn(k);pl.setAttribute('points',Array.from({length:49},(_,j)=>{const x=j/48;return `${(x*100).toFixed(1)},${((1-fn(x))*100).toFixed(1)}`}).join(' '))}autosave();req();return}
@@ -2283,6 +2311,7 @@ sheet.addEventListener('click',async e=>{
     fxshape:()=>{const it=selItem();if(isFx(it)){pushUndo();it.shape=v;autosave();req()}else fxNew().shape=v;renderPanel()},
     fxbg:()=>{const it=selItem();if(isFx(it)){pushUndo();it.bg=v;autosave();req()}else fxNew().bg=v;renderPanel()},
     fximg:()=>fxPickImage(),
+    fxreset:()=>{const it=selItem();if(!isFx(it))return;pushUndo();it.ox=0;it.oy=0;it.sc=1;autosave();renderPanel();req()},
     fxstart:()=>{const d=fxNew();FXUI.msg='';if(d.target==='faces'||d.target==='people')runTrack(d.target,null,null);else startPick(d.target)},
     fxredo:()=>{const it=selItem();if(!isFx(it))return;pause();S.tl=it.t+.001;seekPreview();const id=it.id,md=it.mode;setTimeout(()=>{if(md==='faces')runTrack('faces',null,null,id);else startPick(md==='box'?'box':md==='person'?'person':'face',id)},250)},
     fxcancel:()=>{if(FXUI.key)nat('trackFxCancel',{key:FXUI.key}).catch(()=>{})},

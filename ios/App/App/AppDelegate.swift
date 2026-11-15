@@ -617,7 +617,7 @@ struct RenderSpec {
     let orient: CGImagePropertyOrientation?
     let natural: CGSize
     struct FxKey { let t: Double; let boxes: [CGRect] }   // 正規化・左上原点（向きを直した元映像の座標）
-    struct Fx { let t0, t1: Double; let kind: String; let strength: Double; let color: CIColor; let ellipse: Bool; let pad: Double; let keys: [FxKey]; let image: CIImage?; let mode: String; let bg: CIColor? }
+    struct Fx { let t0, t1: Double; let kind: String; let strength: Double; let color: CIColor; let ellipse: Bool; let pad: Double; let keys: [FxKey]; let image: CIImage?; let mode: String; let bg: CIColor?; let ox: Double; let oy: Double; let sc: Double }
     let fxs: [Fx]
     static func hexColor(_ h: String) -> CIColor {
         let hex = h.trimmingCharacters(in: CharacterSet(charactersIn: "# "))
@@ -677,7 +677,8 @@ struct RenderSpec {
             let bgc: CIColor? = (f["bg"] as? String).flatMap { $0.isEmpty ? nil : RenderSpec.hexColor($0) }
             fl.append(Fx(t0: d("t0", 0), t1: d("t1", 0), kind: f["kind"] as? String ?? "pixel", strength: d("strength", 50),
                          color: RenderSpec.hexColor(f["color"] as? String ?? "#ffffff"), ellipse: (f["shape"] as? String) == "ellipse",
-                         pad: d("pad", 0.2), keys: keys, image: img, mode: f["mode"] as? String ?? "", bg: bgc))
+                         pad: d("pad", 0.2), keys: keys, image: img, mode: f["mode"] as? String ?? "", bg: bgc,
+                         ox: d("ox", 0), oy: d("oy", 0), sc: d("sc", 1)))
         }
         fxs = fl
         // 回転情報（縦撮影など）
@@ -719,7 +720,10 @@ struct RenderSpec {
         var out = src
         let ext = src.extent, vw = ext.width, vh = ext.height, short = min(vw, vh)
         for f in fxs where f.kind != "cutout" && time >= f.t0 - 0.0005 && time < f.t1 {
-            for nb in fxBoxes(f, time) {
+            for b0 in fxBoxes(f, time) {
+                // 追従した枠を、あとから調整した位置・大きさに合わせる
+                let bw = b0.width * CGFloat(f.sc), bh = b0.height * CGFloat(f.sc)
+                let nb = CGRect(x: b0.midX + CGFloat(f.ox) * b0.width - bw / 2, y: b0.midY + CGFloat(f.oy) * b0.height - bh / 2, width: bw, height: bh)
                 let pw = nb.width * CGFloat(f.pad), ph = nb.height * CGFloat(f.pad)
                 let r0 = CGRect(x: (nb.minX - pw / 2) * vw, y: (1 - nb.maxY - ph / 2) * vh, width: (nb.width + pw) * vw, height: (nb.height + ph) * vh)
                 let r = r0.intersection(ext)
